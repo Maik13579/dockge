@@ -237,6 +237,9 @@ export default {
 
             for (let stackName in this.$root.completeStackList) {
                 const stack = this.$root.completeStackList[stackName];
+                if (this.$root.info.showOnlyManagedStacks && !stack.isManagedByDockge) {
+                    continue;
+                }
                 if (statusNameShort(stack.status) === statusName) {
                     num += 1;
                 }

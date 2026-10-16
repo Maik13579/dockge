@@ -57,6 +57,11 @@
                 <div class="form-text"></div>
             </div>
 
+            <div class="form-check form-switch mb-4">
+                <input id="show-only-managed-stacks" v-model="settings.showOnlyManagedStacks" class="form-check-input" type="checkbox" role="switch" :disabled="!settingsLoaded" />
+                <label class="form-check-label" for="show-only-managed-stacks">{{ $t("Show only Dockge-managed stacks") }}</label>
+            </div>
+
             <!-- Save Button -->
             <div>
                 <button class="btn btn-primary" type="submit">

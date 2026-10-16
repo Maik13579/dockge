@@ -48,6 +48,9 @@
             </div>
         </div>
         <div ref="stackList" class="stack-list" :class="{ scrollbar: scrollbar }" :style="stackListStyle">
+            <div v-if="$root.info.showOnlyManagedStacks && agentStackList.length === 0" class="text-center mt-3">
+                {{ $t("No matching managed stacks") }}
+            </div>
             <div v-if="agentStackList[0] && agentStackList[0].stacks.length === 0" class="text-center mt-3">
                 <router-link to="/compose">{{ $t("addFirstStackMsg") }}</router-link>
             </div>
@@ -137,6 +140,9 @@ export default {
             let result = Object.values(this.$root.completeStackList);
 
             result = result.filter(stack => {
+                if (this.$root.info.showOnlyManagedStacks && !stack.isManagedByDockge) {
+                    return false;
+                }
                 // filter by search text
                 // finds stack name, tag name or tag value
                 let searchTextMatch = true;

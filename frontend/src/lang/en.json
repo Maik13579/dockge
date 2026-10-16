@@ -154,5 +154,7 @@
     "Compose file": "Compose file",
     "Resolving Compose configuration...": "Resolving Compose configuration...",
     "Compose configuration could not be resolved": "Compose configuration could not be resolved",
-    "Compose configuration request timed out": "Compose configuration request timed out"
+    "Compose configuration request timed out": "Compose configuration request timed out",
+    "Show only Dockge-managed stacks": "Show only Dockge-managed stacks",
+    "No matching managed stacks": "No matching managed stacks"
 }
