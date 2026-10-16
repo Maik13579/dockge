@@ -8,10 +8,15 @@ export class DockerSocketHandler extends AgentSocketHandler {
     create(socket : DockgeSocket, server : DockgeServer, agentSocket : AgentSocket) {
         // Do not call super.create()
 
-        agentSocket.on("deployStack", async (name : unknown, composeYAML : unknown, composeENV : unknown, isAdd : unknown, callback) => {
+        agentSocket.on("deployStack", async (name : unknown, composeYAML : unknown, composeENV : unknown, isAdd : unknown, composeOverrideYAML : unknown, callback) => {
+            // Keep accepting clients that do not send an override document.
+            if (typeof composeOverrideYAML === "function") {
+                callback = composeOverrideYAML;
+                composeOverrideYAML = undefined;
+            }
             try {
                 checkLogin(socket);
-                const stack = await this.saveStack(server, name, composeYAML, composeENV, isAdd);
+                const stack = await this.saveStack(server, name, composeYAML, composeENV, isAdd, composeOverrideYAML);
                 await stack.deploy(socket);
                 server.sendStackList();
                 callbackResult({
@@ -25,16 +30,40 @@ export class DockerSocketHandler extends AgentSocketHandler {
             }
         });
 
-        agentSocket.on("saveStack", async (name : unknown, composeYAML : unknown, composeENV : unknown, isAdd : unknown, callback) => {
+        agentSocket.on("saveStack", async (name : unknown, composeYAML : unknown, composeENV : unknown, isAdd : unknown, composeOverrideYAML : unknown, callback) => {
+            if (typeof composeOverrideYAML === "function") {
+                callback = composeOverrideYAML;
+                composeOverrideYAML = undefined;
+            }
             try {
                 checkLogin(socket);
-                await this.saveStack(server, name, composeYAML, composeENV, isAdd);
+                await this.saveStack(server, name, composeYAML, composeENV, isAdd, composeOverrideYAML);
                 callbackResult({
                     ok: true,
                     msg: "Saved",
                     msgi18n: true,
                 }, callback);
                 server.sendStackList();
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        agentSocket.on("resolveStackConfig", async (name : unknown, composeYAML : unknown, composeENV : unknown, composeOverrideYAML : unknown, callback) => {
+            try {
+                checkLogin(socket);
+                if (typeof name !== "string" || typeof composeYAML !== "string" || typeof composeENV !== "string" || typeof composeOverrideYAML !== "string") {
+                    throw new ValidationError("Compose drafts must be strings");
+                }
+                if (name && !/^[a-z0-9_-]+$/.test(name)) {
+                    throw new ValidationError("Stack name can only contain [a-z][0-9] _ - only");
+                }
+                const stack = new Stack(server, name || "dockge-preview", composeYAML, composeENV, false, composeOverrideYAML);
+                stack.validate();
+                callbackResult({
+                    ok: true,
+                    config: await stack.resolveConfig(),
+                }, callback);
             } catch (e) {
                 callbackError(e, callback);
             }
@@ -333,7 +362,7 @@ export class DockerSocketHandler extends AgentSocketHandler {
         });
     }
 
-    async saveStack(server : DockgeServer, name : unknown, composeYAML : unknown, composeENV : unknown, isAdd : unknown) : Promise<Stack> {
+    async saveStack(server : DockgeServer, name : unknown, composeYAML : unknown, composeENV : unknown, isAdd : unknown, composeOverrideYAML? : unknown) : Promise<Stack> {
         // Check types
         if (typeof(name) !== "string") {
             throw new ValidationError("Name must be a string");
@@ -347,8 +376,11 @@ export class DockerSocketHandler extends AgentSocketHandler {
         if (typeof(isAdd) !== "boolean") {
             throw new ValidationError("isAdd must be a boolean");
         }
+        if (composeOverrideYAML !== undefined && typeof composeOverrideYAML !== "string") {
+            throw new ValidationError("Compose overrides must be a string");
+        }
 
-        const stack = new Stack(server, name, composeYAML, composeENV, false);
+        const stack = new Stack(server, name, composeYAML, composeENV, false, composeOverrideYAML);
         await stack.save(isAdd);
         return stack;
     }

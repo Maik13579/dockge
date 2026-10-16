@@ -3,7 +3,7 @@
         <div v-if="valid">
             <ul v-if="isArrayInited" class="list-group">
                 <li v-for="(value, index) in array" :key="index" class="list-group-item">
-                    <select v-model="array[index]" class="no-bg domain-input">
+                    <select v-model="array[index]" class="no-bg domain-input" @change="$emit('change')">
                         <option value="">{{ $t(`Select a network...`) }}</option>
                         <option v-for="option in options" :key="option" :value="option">{{ option }}</option>
                     </select>
@@ -40,6 +40,7 @@ export default {
             required: true,
         },
     },
+    emits: [ "change" ],
     data() {
         return {
 
@@ -93,9 +94,11 @@ export default {
                 this.service[this.name] = [];
             }
             this.array.push("");
+            this.$emit("change");
         },
         remove(index) {
             this.array.splice(index, 1);
+            this.$emit("change");
         },
     }
 };

@@ -19,6 +19,7 @@ import {
 import { InteractiveTerminal, Terminal } from "./terminal";
 import childProcessAsync from "promisify-child-process";
 import { Settings } from "./settings";
+import { resolveComposeConfig } from "./compose-config";
 
 export class Stack {
 
@@ -26,6 +27,8 @@ export class Stack {
     protected _status: number = UNKNOWN;
     protected _composeYAML?: string;
     protected _composeENV?: string;
+    protected _composeOverrideYAML?: string;
+    protected _composeOverrideFileName: string = "compose.override.yaml";
     protected _configFilePath?: string;
     protected _composeFileName: string = "compose.yaml";
     protected server: DockgeServer;
@@ -34,17 +37,24 @@ export class Stack {
 
     protected static managedStackList: Map<string, Stack> = new Map();
 
-    constructor(server : DockgeServer, name : string, composeYAML? : string, composeENV? : string, skipFSOperations = false) {
+    constructor(server : DockgeServer, name : string, composeYAML? : string, composeENV? : string, skipFSOperations = false, composeOverrideYAML? : string) {
         this.name = name;
         this.server = server;
         this._composeYAML = composeYAML;
         this._composeENV = composeENV;
+        this._composeOverrideYAML = composeOverrideYAML;
 
         if (!skipFSOperations) {
             // Check if compose file name is different from compose.yaml
             for (const filename of acceptedComposeFileNames) {
                 if (fs.existsSync(path.join(this.path, filename))) {
                     this._composeFileName = filename;
+                    break;
+                }
+            }
+            for (const filename of [ "compose.override.yaml", "compose.override.yml", "docker-compose.override.yaml", "docker-compose.override.yml" ]) {
+                if (fs.existsSync(path.join(this.path, filename))) {
+                    this._composeOverrideFileName = filename;
                     break;
                 }
             }
@@ -74,6 +84,8 @@ export class Stack {
             ...obj,
             composeYAML: this.composeYAML,
             composeENV: this.composeENV,
+            composeOverrideYAML: this.composeOverrideYAML,
+            composeOverrideFileName: this._composeOverrideFileName,
             primaryHostname,
         };
     }
@@ -119,6 +131,10 @@ export class Stack {
 
         // Check YAML format
         yaml.parse(this.composeYAML);
+        const overrides = yaml.parseDocument(this.composeOverrideYAML);
+        if (overrides.errors.length) {
+            throw overrides.errors[0];
+        }
 
         let lines = this.composeENV.split("\n");
 
@@ -154,6 +170,28 @@ export class Stack {
 
     get path() : string {
         return path.join(this.server.stacksDir, this.name);
+    }
+
+    /** Read local overrides separately from the main Compose document. */
+    get composeOverrideYAML() : string {
+        if (this._composeOverrideYAML === undefined) {
+            const filename = path.join(this.path, this._composeOverrideFileName);
+            this._composeOverrideYAML = fs.existsSync(filename) ? fs.readFileSync(filename, "utf-8") : "";
+        }
+        return this._composeOverrideYAML;
+    }
+
+    /** Resolve the editor's drafts using the Docker Compose installed on this agent. */
+    async resolveConfig() : Promise<object> {
+        const globalEnvFile = path.resolve(this.server.stacksDir, "global.env");
+        return resolveComposeConfig({
+            projectDirectory: this.fullPath,
+            workingDirectory: fs.existsSync(this.path) ? this.fullPath : path.resolve(this.server.stacksDir),
+            globalEnvFile: fs.existsSync(globalEnvFile) ? globalEnvFile : undefined,
+            composeYAML: this.composeYAML,
+            composeOverrideYAML: this.composeOverrideYAML,
+            composeENV: this.composeENV,
+        });
     }
 
     get fullPath() : string {
@@ -196,11 +234,27 @@ export class Stack {
 
         // Write or overwrite the compose.yaml
         fs.writeFileSync(path.join(dir, this._composeFileName), this.composeYAML);
+        const overrideFile = path.join(dir, this._composeOverrideFileName);
+        if (this.composeOverrideYAML.trim()) {
+            fs.writeFileSync(overrideFile, this.composeOverrideYAML);
+        } else {
+            await fsAsync.rm(overrideFile, { force: true });
+        }
+        // The config preview and deployment must use the same .env contents.
+        const envFile = path.join(dir, ".env");
+        if (this.composeENV || fs.existsSync(envFile)) {
+            fs.writeFileSync(envFile, this.composeENV);
+        }
         if (process.env.PUID && process.env.PGID) {
             const uid = Number(process.env.PUID);
             const gid = Number(process.env.PGID);
             fs.lchownSync(dir, uid, gid);
             fs.chownSync(path.join(dir, this._composeFileName), uid, gid);
+            for (const filename of [ overrideFile, envFile ]) {
+                if (fs.existsSync(filename)) {
+                    fs.chownSync(filename, uid, gid);
+                }
+            }
         }
     }
 
@@ -407,7 +461,14 @@ export class Stack {
 
     getComposeOptions(command : string, ...extraOptions : string[]) {
         //--env-file ./../global.env --env-file .env
-        let options = [ "compose", command, ...extraOptions ];
+        let options = [ "compose" ];
+        if (fs.existsSync(path.join(this.path, this._composeFileName))) {
+            options.push("-f", this._composeFileName);
+            if (fs.existsSync(path.join(this.path, this._composeOverrideFileName))) {
+                options.push("-f", this._composeOverrideFileName);
+            }
+        }
+        options.push(command, ...extraOptions);
         if (fs.existsSync(path.join(this.server.stacksDir, "global.env"))) {
             if (fs.existsSync(path.join(this.path, ".env"))) {
                 options.splice(1, 0, "--env-file", "./.env");
@@ -553,7 +614,7 @@ export class Stack {
 
     async startService(socket: DockgeSocket, serviceName: string) {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", [ "compose", "up", "-d", serviceName ], this.path);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("up", "-d", serviceName), this.path);
         if (exitCode !== 0) {
             throw new Error(`Failed to start service ${serviceName}, please check logs for more information.`);
         }
@@ -563,7 +624,7 @@ export class Stack {
 
     async stopService(socket: DockgeSocket, serviceName: string): Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", [ "compose", "stop", serviceName ], this.path);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop", serviceName), this.path);
         if (exitCode !== 0) {
             throw new Error(`Failed to stop service ${serviceName}, please check logs for more information.`);
         }
@@ -573,7 +634,7 @@ export class Stack {
 
     async restartService(socket: DockgeSocket, serviceName: string): Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", [ "compose", "restart", serviceName ], this.path);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("restart", serviceName), this.path);
         if (exitCode !== 0) {
             throw new Error(`Failed to restart service ${serviceName}, please check logs for more information.`);
         }

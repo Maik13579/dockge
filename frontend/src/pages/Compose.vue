@@ -123,16 +123,20 @@
 
                     <div ref="containerList">
                         <Container
-                            v-for="(service, name) in jsonConfig.services"
+                            v-for="(service, name) in serviceConfig.services"
                             :key="name"
                             :name="name"
                             :is-edit-mode="isEditMode"
-                            :first="name === Object.keys(jsonConfig.services)[0]"
+                            :first="name === Object.keys(serviceConfig.services)[0]"
+                            :is-included="!jsonConfig.services[name]"
+                            :has-overrides="!!overrideConfig.services[name]"
                             :serviceStatus="serviceStatusList[name]"
                             :dockerStats="dockerStats"
                             @start-service="startService"
                             @stop-service="stopService"
                             @restart-service="restartService"
+                            @update-service="updateService"
+                            @remove-service="removeService"
                         />
                     </div>
 
@@ -167,13 +171,17 @@
                     </div>
                 </div>
                 <div class="col-lg-6">
-                    <h4 class="mb-3">{{ stack.composeFileName }}</h4>
+                    <div class="btn-group mb-3" role="group" :aria-label="$t('Compose file')">
+                        <button type="button" class="btn btn-normal" :class="{ active: activeDocument === 'compose' }" :aria-pressed="activeDocument === 'compose'" :title="stack.composeFileName || 'compose.yaml'" @click="activeDocument = 'compose'">{{ $t("compose") }}</button>
+                        <button type="button" class="btn btn-normal" :class="{ active: activeDocument === 'overrides' }" :aria-pressed="activeDocument === 'overrides'" :title="stack.composeOverrideFileName || 'compose.override.yaml'" @click="activeDocument = 'overrides'">{{ $t("Overrides") }}</button>
+                    </div>
 
                     <!-- YAML editor -->
                     <div class="shadow-box mb-3 editor-box" :class="{'edit-mode' : isEditMode}">
                         <code-mirror
                             ref="editor"
-                            v-model="stack.composeYAML"
+                            :key="activeDocument"
+                            v-model="activeYAML"
                             :extensions="extensions"
                             minimal
                             wrap="true"
@@ -184,9 +192,11 @@
                             @change="yamlCodeChange"
                         />
                     </div>
-                    <div v-if="isEditMode" class="mb-3">
+                    <div v-if="isEditMode && yamlError" class="mb-3 text-danger">
                         {{ yamlError }}
                     </div>
+                    <div v-if="resolvingConfig" class="mb-3 text-secondary" role="status">{{ $t("Resolving Compose configuration...") }}</div>
+                    <div v-if="configError" class="mb-3 text-warning" role="alert">{{ $t("Compose configuration could not be resolved") }}: {{ configError }}</div>
 
                     <!-- ENV editor -->
                     <div v-if="isEditMode">
@@ -251,7 +261,7 @@ import { yaml } from "@codemirror/lang-yaml";
 import { python } from "@codemirror/lang-python";
 import { dracula as editorTheme } from "thememirror";
 import { lineNumbers, EditorView } from "@codemirror/view";
-import { parseDocument, Document } from "yaml";
+import { Document } from "yaml";
 
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import {
@@ -267,6 +277,7 @@ import { BModal } from "bootstrap-vue-next";
 import NetworkInput from "../components/NetworkInput.vue";
 import dotenv from "dotenv";
 import { ref } from "vue";
+import { editableService, parseComposeDocument, updateOverride } from "../compose-editor";
 
 const template = `
 services:
@@ -325,7 +336,17 @@ export default {
     yamlDoc: null,  // For keeping the yaml comments
     data() {
         return {
-            jsonConfig: {},
+            jsonConfig: { services: {} },
+            sourceConfigSnapshot: "",
+            overrideConfig: { services: {} },
+            resolvedConfig: {},
+            resolvedEditorServices: {},
+            activeDocument: "compose",
+            configError: "",
+            resolvingConfig: false,
+            configTimeout: null,
+            configResponseTimeout: null,
+            configRequest: 0,
             envsubstJSONConfig: {},
             yamlError: "",
             processing: true,
@@ -347,6 +368,48 @@ export default {
         };
     },
     computed: {
+        activeYAML: {
+            get() {
+                return this.activeDocument === "compose" ? this.stack.composeYAML : this.stack.composeOverrideYAML;
+            },
+            set(value) {
+                if (this.activeDocument === "compose") {
+                    this.stack.composeYAML = value;
+                } else {
+                    this.stack.composeOverrideYAML = value;
+                }
+            },
+        },
+
+        serviceConfig() {
+            // Form fields are drafts too: mutate the source only through the
+            // explicit field event, after deciding which document owns the edit.
+            const services = JSON.parse(JSON.stringify(this.jsonConfig.services));
+            for (const [ name, service ] of Object.entries(this.resolvedEditorServices)) {
+                if (!services[name] || this.overrideConfig.services[name]) {
+                    services[name] = service;
+                }
+            }
+            return {
+                ...this.jsonConfig,
+                networks: {
+                    ...this.resolvedConfig.networks,
+                    ...this.jsonConfig.networks,
+                },
+                services,
+            };
+        },
+
+        displayEnvConfig() {
+            return {
+                ...this.envsubstJSONConfig,
+                services: {
+                    ...this.envsubstJSONConfig.services,
+                    ...this.resolvedConfig.services,
+                },
+            };
+        },
+
         endpointDisplay() {
             return this.$root.endpointDisplayFunction(this.endpoint);
         },
@@ -429,6 +492,20 @@ export default {
         },
     },
     watch: {
+        "stack.composeOverrideYAML"() {
+            this.yamlCodeChange();
+        },
+
+        "stack.name"() {
+            this.scheduleConfigResolution();
+        },
+
+        "stack.endpoint"() {
+            this.resolvedConfig = {};
+            this.resolvedEditorServices = {};
+            this.scheduleConfigResolution();
+        },
+
         "stack.composeYAML": {
             handler() {
                 if (this.editorFocus) {
@@ -451,7 +528,7 @@ export default {
 
         jsonConfig: {
             handler() {
-                if (!this.editorFocus) {
+                if (!this.editorFocus && JSON.stringify(this.jsonConfig) !== this.sourceConfigSnapshot) {
                     console.debug("jsonConfig changed");
 
                     let doc = new Document(this.jsonConfig);
@@ -463,6 +540,8 @@ export default {
 
                     this.stack.composeYAML = doc.toString();
                     this.yamlDoc = doc;
+                    this.sourceConfigSnapshot = JSON.stringify(this.jsonConfig);
+                    this.scheduleConfigResolution();
                 }
             },
             deep: true,
@@ -498,6 +577,7 @@ export default {
                 name: "",
                 composeYAML,
                 composeENV,
+                composeOverrideYAML: "",
                 isManagedByDockge: true,
                 endpoint: "",
             };
@@ -513,7 +593,10 @@ export default {
         this.requestDockerStats();
     },
     unmounted() {
-
+        clearTimeout(this.configTimeout);
+        clearTimeout(this.configResponseTimeout);
+        clearTimeout(yamlErrorTimeout);
+        this.configRequest++;
     },
     methods: {
         startServiceStatusTimeout() {
@@ -577,6 +660,9 @@ export default {
             this.stopDockerStatsTimeout = true;
             clearTimeout(serviceStatusTimeout);
             clearTimeout(dockerStatsTimeout);
+            clearTimeout(this.configTimeout);
+            clearTimeout(this.configResponseTimeout);
+            this.configRequest++;
 
             // Leave Combined Terminal
             console.debug("leaveCombinedTerminal", this.endpoint, this.stack.name);
@@ -604,7 +690,7 @@ export default {
         deployStack() {
             this.processing = true;
 
-            if (!this.jsonConfig.services) {
+            if (!this.serviceConfig.services) {
                 this.$root.toastError("No services found in compose.yaml");
                 this.processing = false;
                 return;
@@ -617,12 +703,12 @@ export default {
                 return;
             }
 
-            let serviceNameList = Object.keys(this.jsonConfig.services);
+            let serviceNameList = Object.keys(this.serviceConfig.services);
 
             // Set the stack name if empty, use the first container name
             if (!this.stack.name && serviceNameList.length > 0) {
                 let serviceName = serviceNameList[0];
-                let service = this.jsonConfig.services[serviceName];
+                let service = this.serviceConfig.services[serviceName];
 
                 if (service && service.container_name) {
                     this.stack.name = service.container_name;
@@ -633,7 +719,7 @@ export default {
 
             this.bindTerminal();
 
-            this.$root.emitAgent(this.stack.endpoint, "deployStack", this.stack.name, this.stack.composeYAML, this.stack.composeENV, this.isAdd, (res) => {
+            this.$root.emitAgent(this.stack.endpoint, "deployStack", this.stack.name, this.stack.composeYAML, this.stack.composeENV, this.isAdd, this.stack.composeOverrideYAML || "", (res) => {
                 this.processing = false;
                 this.$root.toastRes(res);
 
@@ -647,7 +733,7 @@ export default {
         saveStack() {
             this.processing = true;
 
-            this.$root.emitAgent(this.stack.endpoint, "saveStack", this.stack.name, this.stack.composeYAML, this.stack.composeENV, this.isAdd, (res) => {
+            this.$root.emitAgent(this.stack.endpoint, "saveStack", this.stack.name, this.stack.composeYAML, this.stack.composeENV, this.isAdd, this.stack.composeOverrideYAML || "", (res) => {
                 this.processing = false;
                 this.$root.toastRes(res);
 
@@ -718,7 +804,7 @@ export default {
         },
 
         yamlToJSON(yaml) {
-            let doc = parseDocument(yaml);
+            let doc = parseComposeDocument(yaml);
             if (doc.errors.length > 0) {
                 throw doc.errors[0];
             }
@@ -744,9 +830,12 @@ export default {
         yamlCodeChange() {
             try {
                 let { config, doc } = this.yamlToJSON(this.stack.composeYAML);
+                const overrides = this.yamlToJSON(this.stack.composeOverrideYAML || "").config;
 
                 this.yamlDoc = doc;
+                this.sourceConfigSnapshot = JSON.stringify(config);
                 this.jsonConfig = config;
+                this.overrideConfig = overrides;
 
                 let env = dotenv.parse(this.stack.composeENV);
                 let envYAML = envsubstYAML(this.stack.composeYAML, env);
@@ -754,7 +843,12 @@ export default {
 
                 clearTimeout(yamlErrorTimeout);
                 this.yamlError = "";
+                this.scheduleConfigResolution();
             } catch (e) {
+                clearTimeout(this.configTimeout);
+                clearTimeout(this.configResponseTimeout);
+                this.configRequest++;
+                this.resolvingConfig = false;
                 clearTimeout(yamlErrorTimeout);
 
                 if (this.yamlError) {
@@ -768,6 +862,54 @@ export default {
             }
         },
 
+        /** Resolve drafts on their agent, ignoring responses for older edits. */
+        scheduleConfigResolution() {
+            clearTimeout(this.configTimeout);
+            clearTimeout(this.configResponseTimeout);
+            const request = ++this.configRequest;
+            this.configTimeout = setTimeout(() => {
+                this.resolvingConfig = true;
+                this.configResponseTimeout = setTimeout(() => {
+                    if (request === this.configRequest) {
+                        this.resolvingConfig = false;
+                        this.configError = this.$t("Compose configuration request timed out");
+                    }
+                }, 20000);
+                this.$root.emitAgent(this.endpoint, "resolveStackConfig", this.stack.name || "", this.stack.composeYAML || "", this.stack.composeENV || "", this.stack.composeOverrideYAML || "", (res) => {
+                    if (request !== this.configRequest) {
+                        return;
+                    }
+                    clearTimeout(this.configResponseTimeout);
+                    this.resolvingConfig = false;
+                    this.configError = res.ok ? "" : res.msg;
+                    // Keep the last successful model while a draft is incomplete,
+                    // so an unfinished form field does not remove its own card.
+                    if (res.ok) {
+                        this.resolvedConfig = res.config;
+                        this.resolvedEditorServices = Object.fromEntries(Object.entries(this.resolvedConfig.services || {}).map(([ name, service ]) => [ name, editableService(service) ]));
+                    }
+                });
+            }, 500);
+        },
+
+        /** Keep inherited edits in local overrides instead of flattening includes. */
+        updateService({ name, field, value }) {
+            if (!this.jsonConfig.services[name] || Object.hasOwn(this.overrideConfig.services[name] || {}, field)) {
+                try {
+                    this.stack.composeOverrideYAML = updateOverride(this.stack.composeOverrideYAML || "", name, field, value);
+                } catch (e) {
+                    this.yamlError = e.message;
+                }
+            } else {
+                this.jsonConfig.services[name][field] = value;
+            }
+        },
+
+        /** Remove only services declared in the main document. */
+        removeService(name) {
+            delete this.jsonConfig.services[name];
+        },
+
         enableEditMode() {
             this.isEditMode = true;
         },
@@ -779,7 +921,7 @@ export default {
         addContainer() {
             this.checkYAML();
 
-            if (this.jsonConfig.services[this.newContainerName]) {
+            if (this.serviceConfig.services[this.newContainerName]) {
                 this.$root.toastError("Container name already exists");
                 return;
             }

@@ -3,7 +3,7 @@
         <div v-if="valid">
             <ul v-if="isArrayInited" class="list-group">
                 <li v-for="(value, index) in array" :key="index" class="list-group-item">
-                    <input v-model="array[index]" type="text" class="no-bg domain-input" :placeholder="placeholder" />
+                    <input v-model="array[index]" type="text" class="no-bg domain-input" :placeholder="placeholder" @input="$emit('change')" />
                     <font-awesome-icon icon="times" class="action remove ms-2 me-3 text-danger" @click="remove(index)" />
                 </li>
             </ul>
@@ -36,6 +36,7 @@ export default {
             default: "service",
         }
     },
+    emits: [ "change" ],
     data() {
         return {
 
@@ -114,9 +115,11 @@ export default {
             }
 
             this.array.push("");
+            this.$emit("change");
         },
         remove(index) {
             this.array.splice(index, 1);
+            this.$emit("change");
         },
     }
 };

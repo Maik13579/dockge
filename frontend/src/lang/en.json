@@ -148,5 +148,11 @@
     "rmCode": "rm",
     "rmRfCode": "rm -rf",
     "envVarCode": "DOCKGE_ENABLE_CONSOLE=true",
-    "confirmLeaveStack": "You are currently editing a stack. Are you sure you want to leave?"
+    "confirmLeaveStack": "You are currently editing a stack. Are you sure you want to leave?",
+    "Overrides": "Overrides",
+    "Included": "Included",
+    "Compose file": "Compose file",
+    "Resolving Compose configuration...": "Resolving Compose configuration...",
+    "Compose configuration could not be resolved": "Compose configuration could not be resolved",
+    "Compose configuration request timed out": "Compose configuration request timed out"
 }

@@ -3,13 +3,14 @@
         <div class="row">
             <div class="col-5">
                 <h4>{{ name }}</h4>
+                <span v-if="isIncluded" class="badge bg-secondary mb-2">{{ $t(hasOverrides ? "Overrides" : "Included") }}</span>
                 <div class="image mb-2">
                     <span class="me-1">{{ imageName }}:</span><span class="tag">{{ imageTag }}</span>
                 </div>
                 <div v-if="!isEditMode">
                     <span class="badge me-1" :class="bgStyle">{{ status }}</span>
 
-                    <a v-for="port in (ports ?? envsubstService.ports)" :key="port" :href="parsePort(port).url" target="_blank">
+                    <a v-for="(port, index) in envsubstService.ports" :key="index" :href="parsePort(port).url" target="_blank">
                         <span class="badge me-1 bg-secondary">{{ parsePort(port).display }}</span>
                     </a>
                 </div>
@@ -59,7 +60,7 @@
                 {{ $t("Edit") }}
             </button>
             <button v-if="false" class="btn btn-normal me-2">Rename</button>
-            <button class="btn btn-danger me-2" @click="remove">
+            <button v-if="!isIncluded && !hasOverrides" class="btn btn-danger me-2" @click="remove">
                 <font-awesome-icon icon="trash" />
                 {{ $t("deleteContainer") }}
             </button>
@@ -103,6 +104,7 @@
                             v-model="service.image"
                             class="form-control"
                             list="image-datalist"
+                            @input="updateField('image')"
                         />
                     </div>
 
@@ -118,7 +120,7 @@
                     <label class="form-label">
                         {{ $tc("port", 2) }}
                     </label>
-                    <ArrayInput name="ports" :display-name="$t('port')" placeholder="HOST:CONTAINER" />
+                    <ArrayInput name="ports" :display-name="$t('port')" placeholder="HOST:CONTAINER" @change="updateField('ports')" />
                 </div>
 
                 <!-- Volumes -->
@@ -126,7 +128,7 @@
                     <label class="form-label">
                         {{ $tc("volume", 2) }}
                     </label>
-                    <ArrayInput name="volumes" :display-name="$t('volume')" placeholder="HOST:CONTAINER" />
+                    <ArrayInput name="volumes" :display-name="$t('volume')" placeholder="HOST:CONTAINER" @change="updateField('volumes')" />
                 </div>
 
                 <!-- Restart Policy -->
@@ -134,7 +136,7 @@
                     <label class="form-label">
                         {{ $t("restartPolicy") }}
                     </label>
-                    <select v-model="service.restart" class="form-select">
+                    <select v-model="service.restart" class="form-select" @change="updateField('restart')">
                         <option value="always">{{ $t("restartPolicyAlways") }}</option>
                         <option value="unless-stopped">{{ $t("restartPolicyUnlessStopped") }}</option>
                         <option value="on-failure">{{ $t("restartPolicyOnFailure") }}</option>
@@ -147,7 +149,7 @@
                     <label class="form-label">
                         {{ $tc("environmentVariable", 2) }}
                     </label>
-                    <ArrayInput name="environment" :display-name="$t('environmentVariable')" placeholder="KEY=VALUE" />
+                    <ArrayInput name="environment" :display-name="$t('environmentVariable')" placeholder="KEY=VALUE" @change="updateField('environment')" />
                 </div>
 
                 <!-- Container Name -->
@@ -159,6 +161,7 @@
                         <input
                             v-model="service.container_name"
                             class="form-control"
+                            @input="updateField('container_name')"
                         />
                     </div>
                     <div class="form-text"></div>
@@ -174,7 +177,7 @@
                         {{ $t("NoNetworksAvailable") }}
                     </div>
 
-                    <ArraySelect name="networks" :display-name="$t('network')" placeholder="Network Name" :options="networkList" />
+                    <ArraySelect name="networks" :display-name="$t('network')" placeholder="Network Name" :options="networkList" @change="updateField('networks')" />
                 </div>
 
                 <!-- Depends on -->
@@ -182,7 +185,7 @@
                     <label class="form-label">
                         {{ $t("dependsOn") }}
                     </label>
-                    <ArrayInput name="depends_on" :display-name="$t('dependsOn')" :placeholder="$t(`containerName`)" />
+                    <ArrayInput name="depends_on" :display-name="$t('dependsOn')" :placeholder="$t(`containerName`)" @change="updateField('depends_on')" />
                 </div>
             </div>
         </transition>
@@ -201,6 +204,14 @@ export default defineComponent({
         DockerStat
     },
     props: {
+        isIncluded: {
+            type: Boolean,
+            default: false,
+        },
+        hasOverrides: {
+            type: Boolean,
+            default: false,
+        },
         name: {
             type: String,
             required: true,
@@ -225,7 +236,9 @@ export default defineComponent({
     emits: [
         "start-service",
         "stop-service",
-        "restart-service"
+        "restart-service",
+        "update-service",
+        "remove-service"
     ],
     data() {
         return {
@@ -300,11 +313,11 @@ export default defineComponent({
         },
 
         jsonObject() {
-            return this.$parent.$parent.jsonConfig;
+            return this.$parent.$parent.serviceConfig;
         },
 
         envsubstJSONConfig() {
-            return this.$parent.$parent.envsubstJSONConfig;
+            return this.$parent.$parent.displayEnvConfig;
         },
 
         envsubstService() {
@@ -359,6 +372,10 @@ export default defineComponent({
     },
     methods: {
         parsePort(port) {
+            // Canonical Compose ports use objects; local YAML can use either form.
+            if (port && typeof port === "object") {
+                port = `${port.published || port.target}/${port.protocol || "tcp"}`;
+            }
             if (this.stack.endpoint) {
                 return parseDockerPort(port, this.stack.primaryHostname);
             } else {
@@ -367,7 +384,15 @@ export default defineComponent({
             }
         },
         remove() {
-            delete this.jsonObject.services[this.name];
+            this.$emit("remove-service", this.name);
+        },
+        /** Tell the source editor which field was changed in the service form. */
+        updateField(field) {
+            this.$emit("update-service", {
+                name: this.name,
+                field,
+                value: this.service[field],
+            });
         },
         startService() {
             this.$emit("start-service", this.name);
