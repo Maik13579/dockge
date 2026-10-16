@@ -288,6 +288,7 @@ services:
       - "8080:80"
 `;
 const envDefault = "# VARIABLE=value #comment";
+const validationDelay = 3000;
 
 let yamlErrorTimeout = null;
 
@@ -828,6 +829,10 @@ export default {
         },
 
         yamlCodeChange() {
+            clearTimeout(yamlErrorTimeout);
+            this.yamlError = "";
+            this.configError = "";
+            this.resolvingConfig = false;
             try {
                 let { config, doc } = this.yamlToJSON(this.stack.composeYAML);
                 const overrides = this.yamlToJSON(this.stack.composeOverrideYAML || "").config;
@@ -841,8 +846,6 @@ export default {
                 let envYAML = envsubstYAML(this.stack.composeYAML, env);
                 this.envsubstJSONConfig = this.yamlToJSON(envYAML).config;
 
-                clearTimeout(yamlErrorTimeout);
-                this.yamlError = "";
                 this.scheduleConfigResolution();
             } catch (e) {
                 clearTimeout(this.configTimeout);
@@ -851,21 +854,18 @@ export default {
                 this.resolvingConfig = false;
                 clearTimeout(yamlErrorTimeout);
 
-                if (this.yamlError) {
+                yamlErrorTimeout = setTimeout(() => {
                     this.yamlError = e.message;
-
-                } else {
-                    yamlErrorTimeout = setTimeout(() => {
-                        this.yamlError = e.message;
-                    }, 3000);
-                }
+                }, validationDelay);
             }
         },
 
-        /** Resolve drafts on their agent, ignoring responses for older edits. */
+        /** Resolve drafts after typing pauses, ignoring responses for older edits. */
         scheduleConfigResolution() {
             clearTimeout(this.configTimeout);
             clearTimeout(this.configResponseTimeout);
+            this.configError = "";
+            this.resolvingConfig = false;
             const request = ++this.configRequest;
             this.configTimeout = setTimeout(() => {
                 this.resolvingConfig = true;
@@ -889,7 +889,7 @@ export default {
                         this.resolvedEditorServices = Object.fromEntries(Object.entries(this.resolvedConfig.services || {}).map(([ name, service ]) => [ name, editableService(service) ]));
                     }
                 });
-            }, 500);
+            }, validationDelay);
         },
 
         /** Keep inherited edits in local overrides instead of flattening includes. */
