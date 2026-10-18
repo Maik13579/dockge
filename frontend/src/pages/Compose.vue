@@ -41,13 +41,13 @@
                         {{ $t("updateStack") }}
                     </button>
 
-                    <button v-if="!isEditMode" class="btn btn-normal" :disabled="processing" @click="stopStack">
+                    <button v-if="!isEditMode || operationRunning" class="btn btn-normal" :disabled="stopping" @click="stopStack">
                         <font-awesome-icon icon="stop" class="me-1" />
                         {{ $t("stopStack") }}
                     </button>
 
                     <BDropdown right text="" variant="normal">
-                        <BDropdownItem @click="downStack">
+                        <BDropdownItem :disabled="stopping" @click="downStack">
                             <font-awesome-icon icon="stop" class="me-1" />
                             {{ $t("downStack") }}
                         </BDropdownItem>
@@ -351,6 +351,9 @@ export default {
             envsubstJSONConfig: {},
             yamlError: "",
             processing: true,
+            stopping: false,
+            operationRunning: false,
+            operationRequest: 0,
             showProgressTerminal: false,
             progressTerminalRows: PROGRESS_TERMINAL_ROWS,
             combinedTerminalRows: COMBINED_TERMINAL_ROWS,
@@ -455,7 +458,7 @@ export default {
         },
 
         status() {
-            return this.globalStack?.status;
+            return this.globalStack?.status ?? this.stack.status;
         },
 
         active() {
@@ -623,6 +626,12 @@ export default {
             this.$root.emitAgent(this.endpoint, "serviceStatusList", this.stack.name, (res) => {
                 if (res.ok) {
                     this.serviceStatusList = res.serviceStatusList;
+                    if (res.stackStatus !== undefined) {
+                        this.stack.status = res.stackStatus;
+                        if (this.globalStack) {
+                            this.globalStack.status = res.stackStatus;
+                        }
+                    }
                 }
                 if (!this.stopServiceStatusTimeout) {
                     this.startServiceStatusTimeout();
@@ -677,10 +686,10 @@ export default {
         loadStack() {
             this.processing = true;
             this.$root.emitAgent(this.endpoint, "getStack", this.stack.name, (res) => {
+                this.processing = false;
                 if (res.ok) {
                     this.stack = res.stack;
                     this.yamlCodeChange();
-                    this.processing = false;
                     this.bindTerminal();
                 } else {
                     this.$root.toastRes(res);
@@ -718,11 +727,12 @@ export default {
                 }
             }
 
-            this.bindTerminal();
+            const request = this.beginOperation(false);
 
             this.$root.emitAgent(this.stack.endpoint, "deployStack", this.stack.name, this.stack.composeYAML, this.stack.composeENV, this.isAdd, this.stack.composeOverrideYAML || "", (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
+                if (!this.finishOperation(request, res)) {
+                    return;
+                }
 
                 if (res.ok) {
                     this.isEditMode = false;
@@ -746,47 +756,58 @@ export default {
         },
 
         startStack() {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "startStack", this.stack.name, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-            });
+            this.runStackOperation("startStack");
         },
 
         stopStack() {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "stopStack", this.stack.name, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-            });
+            this.runStackOperation("stopStack");
         },
 
         downStack() {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "downStack", this.stack.name, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-            });
+            this.runStackOperation("downStack");
         },
 
         restartStack() {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "restartStack", this.stack.name, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-            });
+            this.runStackOperation("restartStack");
         },
 
         updateStack() {
-            this.processing = true;
+            this.runStackOperation("updateStack");
+        },
 
-            this.$root.emitAgent(this.endpoint, "updateStack", this.stack.name, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
+        beginOperation(stopping) {
+            const request = ++this.operationRequest;
+            this.processing = true;
+            this.stopping = stopping;
+            this.operationRunning = true;
+            this.showProgressTerminal = true;
+            this.bindTerminal();
+            this.$nextTick(() => this.$refs.progressTerminal?.updateTerminalSize());
+            return request;
+        },
+
+        finishOperation(request, res) {
+            // Stop supersedes a pending Start. Its late reply must not unlock
+            // the controls while Down is still running.
+            if (request !== this.operationRequest) {
+                return false;
+            }
+            this.processing = false;
+            this.stopping = false;
+            this.operationRunning = false;
+            this.$root.toastRes(res);
+            this.requestServiceStatus();
+            return true;
+        },
+
+        runStackOperation(event, serviceName) {
+            if (this.stopping) {
+                return;
+            }
+            const request = this.beginOperation(event === "stopStack" || event === "downStack");
+            const args = serviceName === undefined ? [] : [ serviceName ];
+            this.$root.emitAgent(this.endpoint, event, this.stack.name, ...args, (res) => {
+                this.finishOperation(request, res);
             });
         },
 
@@ -947,42 +968,15 @@ export default {
         },
 
         startService(serviceName) {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "startService", this.stack.name, serviceName, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-
-                if (res.ok) {
-                    this.requestServiceStatus(); // Refresh service status
-                }
-            });
+            this.runStackOperation("startService", serviceName);
         },
 
         stopService(serviceName) {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "stopService", this.stack.name, serviceName, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-
-                if (res.ok) {
-                    this.requestServiceStatus(); // Refresh service status
-                }
-            });
+            this.runStackOperation("stopService", serviceName);
         },
 
         restartService(serviceName) {
-            this.processing = true;
-
-            this.$root.emitAgent(this.endpoint, "restartService", this.stack.name, serviceName, (res) => {
-                this.processing = false;
-                this.$root.toastRes(res);
-
-                if (res.ok) {
-                    this.requestServiceStatus(); // Refresh service status
-                }
-            });
+            this.runStackOperation("restartService", serviceName);
         },
     }
 };

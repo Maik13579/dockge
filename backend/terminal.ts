@@ -25,7 +25,9 @@ export class Terminal {
     protected file : string;
     protected args : string | string[];
     protected cwd : string;
-    protected callback? : (exitCode : number) => void;
+    protected callbacks : Array<(exitCode : number) => void> = [];
+    protected exitCode? : number;
+    protected interrupted = false;
 
     protected _rows : number = TERMINAL_ROWS;
     protected _cols : number = TERMINAL_COLS;
@@ -149,6 +151,10 @@ export class Terminal {
      * @param res
      */
     protected exit = (res : {exitCode: number, signal?: number | undefined}) => {
+        if (this.exitCode !== undefined) {
+            return;
+        }
+        this.exitCode = res.exitCode;
         for (const socketID in this.socketList) {
             const socket = this.socketList[socketID];
             socket.emitAgent("terminalExit", this.name, res.exitCode);
@@ -157,19 +163,26 @@ export class Terminal {
         // Remove all clients
         this.socketList = {};
 
-        Terminal.terminalMap.delete(this.name);
+        if (Terminal.getTerminal(this.name) === this) {
+            Terminal.terminalMap.delete(this.name);
+        }
         log.debug("Terminal", "Terminal " + this.name + " exited with code " + res.exitCode);
 
         clearInterval(this.keepAliveInterval);
         clearInterval(this.kickDisconnectedClientsInterval);
 
-        if (this.callback) {
-            this.callback(res.exitCode);
+        for (const callback of this.callbacks) {
+            callback(res.exitCode);
         }
+        this.callbacks = [];
     };
 
     public onExit(callback : (exitCode : number) => void) {
-        this.callback = callback;
+        if (this.exitCode !== undefined) {
+            callback(this.exitCode);
+        } else {
+            this.callbacks.push(callback);
+        }
     }
 
     public join(socket : DockgeSocket) {
@@ -204,6 +217,26 @@ export class Terminal {
         this.ptyProcess?.write("\x03");
     }
 
+    /** Stop a pending Compose command before starting its replacement. */
+    public interrupt(): Promise<void> {
+        if (this.exitCode !== undefined) {
+            return Promise.resolve();
+        }
+        this.interrupted = true;
+        return new Promise((resolve, reject) => {
+            // Give Compose a chance to exit on Ctrl+C, then stop the CLI process
+            // so a waiting up cannot keep creating containers during down.
+            const killTimer = setTimeout(() => this.ptyProcess?.kill("SIGKILL"), 2000);
+            const timeout = setTimeout(() => reject(new Error("The previous Compose command did not exit.")), 5000);
+            this.onExit(() => {
+                clearTimeout(killTimer);
+                clearTimeout(timeout);
+                resolve();
+            });
+            this.close();
+        });
+    }
+
     /**
      * Get a running and non-exited terminal
      * @param name
@@ -221,11 +254,15 @@ export class Terminal {
         return terminal;
     }
 
-    public static exec(server : DockgeServer, socket : DockgeSocket | undefined, terminalName : string, file : string, args : string | string[], cwd : string) : Promise<number> {
+    public static async exec(server : DockgeServer, socket : DockgeSocket | undefined, terminalName : string, file : string, args : string | string[], cwd : string, interrupt = false) : Promise<number> {
+        const previous = Terminal.getTerminal(terminalName);
+        if (previous && interrupt) {
+            await previous.interrupt();
+        }
         return new Promise((resolve, reject) => {
             // check if terminal exists
             if (Terminal.terminalMap.has(terminalName)) {
-                reject("Another operation is already running, please try again later.");
+                reject(new Error("Another operation is already running, please try again later."));
                 return;
             }
 
@@ -237,7 +274,11 @@ export class Terminal {
             }
 
             terminal.onExit((exitCode : number) => {
-                resolve(exitCode);
+                if (terminal.interrupted) {
+                    reject(new Error("Compose operation cancelled by Stop."));
+                } else {
+                    resolve(exitCode);
+                }
             });
             terminal.start();
         });

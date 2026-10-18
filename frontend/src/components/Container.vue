@@ -18,12 +18,12 @@
             <div class="col-7">
                 <div class="function">
                     <div class="btn-group me-2" role="group">
-                        <router-link v-if="!isEditMode && (status === 'running' || status === 'healthy')" class="btn btn-normal" :to="terminalRouteLink" disabled="">
+                        <router-link v-if="!isEditMode && isRunning" class="btn btn-normal" :to="terminalRouteLink" disabled="">
                             <font-awesome-icon icon="terminal" />
                             Bash
                         </router-link>
                         <button
-                            v-if="serviceCount > 1 && !isEditMode && status !== 'running' && status !== 'healthy'"
+                            v-if="serviceCount > 1 && !isEditMode && !isRunning"
                             class="btn btn-primary"
                             :disabled="processing"
                             @click="startService"
@@ -32,7 +32,7 @@
                             {{ $t("startStack") }}
                         </button>
                         <button
-                            v-if="serviceCount > 1 && !isEditMode && (status === 'running' || status === 'healthy' || status === 'unhealthy')"
+                            v-if="serviceCount > 1 && !isEditMode && isRunning"
                             class="btn btn-normal"
                             :disabled="processing"
                             @click="restartService"
@@ -41,7 +41,7 @@
                             {{ $t("restartStack") }}
                         </button>
                         <button
-                            v-if="serviceCount > 1 && !isEditMode && (status === 'running' || status === 'healthy' || status === 'unhealthy')"
+                            v-if="serviceCount > 1 && !isEditMode && isRunning"
                             class="btn btn-normal"
                             :disabled="processing"
                             @click="stopService"
@@ -312,6 +312,16 @@ export default defineComponent({
             return Object.keys(this.jsonObject.services).length;
         },
 
+        processing() {
+            return this.$parent.$parent.processing;
+        },
+
+        isRunning() {
+            return (this.serviceStatus || []).some(instance => instance.state
+                ? [ "running", "restarting", "paused" ].includes(instance.state)
+                : [ "running", "healthy", "unhealthy", "starting" ].includes(instance.status));
+        },
+
         jsonObject() {
             return this.$parent.$parent.serviceConfig;
         },
@@ -359,7 +369,7 @@ export default defineComponent({
                 .sort((a, b) => a.Name.localeCompare(b.Name));
         },
         status() {
-            if (!this.serviceStatus) {
+            if (!this.serviceStatus?.length) {
                 return "N/A";
             }
             return this.serviceStatus[0].status;

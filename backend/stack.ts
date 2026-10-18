@@ -284,14 +284,8 @@ export class Stack {
     }
 
     async updateStatus() {
-        let statusList = await Stack.getStatusList();
-        let status = statusList.get(this.name);
-
-        if (status) {
-            this._status = status;
-        } else {
-            this._status = UNKNOWN;
-        }
+        const stacks = await Stack.getStackList(this.server, true);
+        this._status = stacks.get(this.name)?.status ?? UNKNOWN;
     }
 
     /**
@@ -352,25 +346,24 @@ export class Stack {
             this.managedStackList = new Map(stackList);
         }
 
-        // Cached Stack instances retain the previous poll's status. Reset managed
-        // entries before merging Docker's current projects, including after down.
-        for (const stack of stackList.values()) {
-            stack._status = CREATED_FILE;
-        }
-
         // Get status from docker compose ls
         let res = await childProcessAsync.spawn("docker", [ "compose", "ls", "--all", "--format", "json" ], {
             encoding: "utf-8",
         });
 
-        if (!res.stdout) {
-            return stackList;
+        const composeList = res.stdout ? JSON.parse(res.stdout.toString()) : [];
+        // Only clear cached status after a successful poll, so a temporary
+        // Docker failure does not make running stacks appear inactive.
+        for (const stack of stackList.values()) {
+            stack._status = CREATED_FILE;
         }
 
-        let composeList = JSON.parse(res.stdout.toString());
-
         for (let composeStack of composeList) {
-            let stack = stackList.get(composeStack.Name);
+            // Compose's project name can come from name: or COMPOSE_PROJECT_NAME,
+            // independently of the folder name used as Dockge's stack identifier.
+            const configFiles: string[] = (composeStack.ConfigFiles || "").split(",").filter(Boolean).map((file: string) => path.resolve(file.trim()));
+            let stack = [ ...stackList.values() ].find(candidate => configFiles.includes(path.join(candidate.fullPath, candidate._composeFileName)))
+                ?? stackList.get(composeStack.Name);
 
             // This stack probably is not managed by Dockge, but we still want to show it
             if (!stack) {
@@ -458,6 +451,11 @@ export class Stack {
     getComposeOptions(command : string, ...extraOptions : string[]) {
         //--env-file ./../global.env --env-file .env
         let options = [ "compose" ];
+        if ([ "up", "down", "stop", "restart", "pull" ].includes(command)) {
+            // The compact TTY renderer hides containers behind "... N more"
+            // in the embedded progress terminal. Keep every progress line.
+            options.push("--progress", "plain");
+        }
         if (fs.existsSync(path.join(this.path, this._composeFileName))) {
             options.push("-f", this._composeFileName);
             if (fs.existsSync(path.join(this.path, this._composeOverrideFileName))) {
@@ -485,7 +483,7 @@ export class Stack {
 
     async stop(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path);
+        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to stop, please check the terminal output for more information.");
         }
@@ -503,7 +501,7 @@ export class Stack {
 
     async down(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path);
+        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to down, please check the terminal output for more information.");
         }
@@ -565,45 +563,52 @@ export class Stack {
 
     async getServiceStatusList() {
         let statusList = new Map<string, Array<object>>();
+        const states: string[] = [];
 
         try {
-            let res = await childProcessAsync.spawn("docker", this.getComposeOptions("ps", "--format", "json"), {
+            let res = await childProcessAsync.spawn("docker", this.getComposeOptions("ps", "--all", "--format", "json"), {
                 cwd: this.path,
                 encoding: "utf-8",
             });
 
-            if (!res.stdout) {
+            const output = res.stdout?.toString().trim();
+            if (!output) {
+                this._status = CREATED_FILE;
                 return statusList;
             }
 
-            let lines = res.stdout?.toString().split("\n");
-
             const addLine = (obj: { Service: string, State: string, Name: string, Health: string }) => {
+                states.push(obj.State);
                 if (!statusList.has(obj.Service)) {
                     statusList.set(obj.Service, []);
                 }
                 statusList.get(obj.Service)?.push({
                     status: obj.Health || obj.State,
+                    state: obj.State,
+                    health: obj.Health,
                     name: obj.Name
                 });
             };
 
-            for (let line of lines) {
-                try {
-                    let obj = JSON.parse(line);
-                    if (obj instanceof Array) {
-                        obj.forEach(addLine);
-                    } else {
-                        addLine(obj);
-                    }
-                } catch (e) {
-                }
+            // Compose versions return either a JSON array (possibly pretty
+            // printed) or one JSON object per line. Do not silently discard
+            // malformed output and report all services as absent.
+            let containers;
+            try {
+                const parsed = JSON.parse(output);
+                containers = Array.isArray(parsed) ? parsed : [ parsed ];
+            } catch {
+                containers = output.split("\n").filter(line => line.trim()).map(line => JSON.parse(line));
+            }
+            for (const container of containers) {
+                addLine(container);
             }
 
+            this._status = states.length ? composeStatus(states.join(",")) : CREATED_FILE;
             return statusList;
         } catch (e) {
             log.error("getServiceStatusList", e);
-            return statusList;
+            throw e;
         }
     }
 

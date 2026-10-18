@@ -401,11 +401,15 @@ export default defineComponent({
         },
 
         bindTerminal(endpoint : string, terminalName : string, terminal : Terminal) {
+            // Accept live output immediately, including before the join reply.
+            terminalMap.set(terminalName, terminal);
             // Load terminal, get terminal screen
             this.emitAgent(endpoint, "terminalJoin", terminalName, (res) => {
+                if (terminalMap.get(terminalName) !== terminal) {
+                    return;
+                }
                 if (res.ok) {
                     terminal.write(res.buffer);
-                    terminalMap.set(terminalName, terminal);
                 } else {
                     this.toastRes(res);
                 }

@@ -3,6 +3,7 @@ import { DockgeServer } from "../dockge-server";
 import { callbackError, callbackResult, checkLogin, DockgeSocket, ValidationError } from "../util-server";
 import { Stack } from "../stack";
 import { AgentSocket } from "../../common/agent-socket";
+import { RUNNING } from "../../common/util-common";
 
 export class DockerSocketHandler extends AgentSocketHandler {
     create(socket : DockgeSocket, server : DockgeServer, agentSocket : AgentSocket) {
@@ -258,11 +259,18 @@ export class DockerSocketHandler extends AgentSocketHandler {
                     throw new ValidationError("Stack name must be a string");
                 }
 
-                const stack = await Stack.getStack(server, stackName, true);
+                const stack = await Stack.getStack(server, stackName);
                 const serviceStatusList = Object.fromEntries(await stack.getServiceStatusList());
+                // Up may still be waiting on another service's health check.
+                // Attach logs for the containers already running, and restart
+                // a logs process that exited while the stack was still empty.
+                if (stack.status === RUNNING && stack.isManagedByDockge) {
+                    await stack.joinCombinedTerminal(socket);
+                }
                 callbackResult({
                     ok: true,
                     serviceStatusList,
+                    stackStatus: stack.status,
                 }, callback);
             } catch (e) {
                 callbackError(e, callback);
