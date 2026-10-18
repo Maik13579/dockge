@@ -36,6 +36,7 @@ export class Stack {
     protected combinedTerminal? : Terminal;
 
     protected static managedStackList: Map<string, Stack> = new Map();
+    protected static pendingUpdates: Map<string, symbol> = new Map();
 
     constructor(server : DockgeServer, name : string, composeYAML? : string, composeENV? : string, skipFSOperations = false, composeOverrideYAML? : string) {
         this.name = name;
@@ -349,6 +350,8 @@ export class Stack {
         // Get status from docker compose ls
         let res = await childProcessAsync.spawn("docker", [ "compose", "ls", "--all", "--format", "json" ], {
             encoding: "utf-8",
+            timeout: 10000,
+            maxBuffer: 10 * 1024 * 1024,
         });
 
         const composeList = res.stdout ? JSON.parse(res.stdout.toString()) : [];
@@ -483,6 +486,7 @@ export class Stack {
 
     async stop(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
+        Stack.pendingUpdates.delete(terminalName);
         let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to stop, please check the terminal output for more information.");
@@ -501,6 +505,7 @@ export class Stack {
 
     async down(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
+        Stack.pendingUpdates.delete(terminalName);
         let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to down, please check the terminal output for more information.");
@@ -510,23 +515,39 @@ export class Stack {
 
     async update(socket: DockgeSocket) {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("pull"), this.path);
-        if (exitCode !== 0) {
-            throw new Error("Failed to pull, please check the terminal output for more information.");
+        if (Stack.pendingUpdates.has(terminalName)) {
+            throw new Error("Another operation is already running, please try again later.");
         }
+        const operation = Symbol();
+        Stack.pendingUpdates.set(terminalName, operation);
+        try {
+            let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("pull"), this.path);
+            if (exitCode !== 0) {
+                throw new Error("Failed to pull, please check the terminal output for more information.");
+            }
 
-        // If the stack is not running, we don't need to restart it
-        await this.updateStatus();
-        log.debug("update", "Status: " + this.status);
-        if (this.status !== RUNNING) {
+            // Stop also cancels the gap between Pull and Up, where there is no
+            // terminal process for Terminal.exec to interrupt.
+            await this.updateStatus();
+            if (Stack.pendingUpdates.get(terminalName) !== operation) {
+                throw new Error("Compose operation cancelled by Stop.");
+            }
+            log.debug("update", "Status: " + this.status);
+            // If the stack is not running, we don't need to restart it
+            if (this.status !== RUNNING) {
+                return exitCode;
+            }
+
+            exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("up", "-d", "--remove-orphans"), this.path);
+            if (exitCode !== 0) {
+                throw new Error("Failed to restart, please check the terminal output for more information.");
+            }
             return exitCode;
+        } finally {
+            if (Stack.pendingUpdates.get(terminalName) === operation) {
+                Stack.pendingUpdates.delete(terminalName);
+            }
         }
-
-        exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("up", "-d", "--remove-orphans"), this.path);
-        if (exitCode !== 0) {
-            throw new Error("Failed to restart, please check the terminal output for more information.");
-        }
-        return exitCode;
     }
 
     async joinCombinedTerminal(socket: DockgeSocket) {
@@ -569,6 +590,8 @@ export class Stack {
             let res = await childProcessAsync.spawn("docker", this.getComposeOptions("ps", "--all", "--format", "json"), {
                 cwd: this.path,
                 encoding: "utf-8",
+                timeout: 10000,
+                maxBuffer: 10 * 1024 * 1024,
             });
 
             const output = res.stdout?.toString().trim();

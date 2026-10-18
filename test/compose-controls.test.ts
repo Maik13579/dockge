@@ -106,7 +106,6 @@ test("service polling updates the stack badge and controls without waiting for t
     const { instance: page } = component("../frontend/src/pages/Compose.vue");
     page.stack = { name: "test" };
     page.$root.completeStackList.test_ = { status: util.CREATED_FILE };
-    page.stopServiceStatusTimeout = true;
     let reply;
     page.$root.emitAgent = (...args) => {
         reply = args.at(-1);
@@ -131,8 +130,11 @@ test("running services with starting/unhealthy checks and mixed replicas get run
     const { instance: container } = component("../frontend/src/components/Container.vue");
     for (const status of [ "starting", "unhealthy", "healthy", "running" ]) {
         container.serviceStatus = [{ state: "running",
-            status }];
+            status,
+            health: status === "running" ? "" : status }];
         assert.equal(container.isRunning, true);
+        assert.equal(container.status, "running");
+        assert.equal(container.health, status === "running" ? "" : status);
         // Older agents expose only status, so preserve their compatibility.
         container.serviceStatus = [{ status }];
         assert.equal(container.isRunning, true);
@@ -141,12 +143,123 @@ test("running services with starting/unhealthy checks and mixed replicas get run
         status: "exited" }, { state: "running",
         status: "starting" }];
     assert.equal(container.isRunning, true);
+    assert.equal(container.status, "running");
     container.serviceStatus = [{ state: "exited",
         status: "healthy" }];
     assert.equal(container.isRunning, false, "Container state takes precedence over a stale health result");
     container.serviceStatus = [];
     assert.equal(container.isRunning, false);
     assert.equal(container.status, "N/A");
+});
+
+test("a lost status reply is retried and a late reply cannot overwrite the fresh state", () => {
+    const { instance: page, tick } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    page.$root.completeStackList.test_ = { status: util.CREATED_STACK };
+    const replies = [];
+    page.$root.emitAgent = (...args) => replies.push(args.at(-1));
+    page.requestServiceStatus();
+    tick(14999);
+    assert.equal(replies.length, 1, "Do not overlap ordinary slow polls");
+    tick(1);
+    assert.equal(replies.length, 2, "Retry without needing the missing acknowledgement");
+    assert.match(page.serviceStatusError, /timed out/);
+    replies[1]({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: { app: [{ state: "running",
+            status: "healthy" }] } });
+    assert.equal(page.active, true);
+    assert.equal(page.serviceStatusError, "");
+    replies[0]({ ok: true,
+        stackStatus: util.CREATED_STACK,
+        serviceStatusList: { app: [{ state: "created",
+            status: "created" }] } });
+    assert.equal(page.active, true);
+    assert.equal(page.serviceStatusList.app[0].state, "running");
+    tick(5000);
+    assert.equal(replies.length, 3, "Successful replies resume normal polling");
+});
+
+test("every card in a multi-service startup converges to the latest running snapshot", () => {
+    const { instance: page, tick } = component("../frontend/src/pages/Compose.vue");
+    const { instance: card } = component("../frontend/src/components/Container.vue");
+    page.stack = { name: "test" };
+    const replies = [];
+    page.$root.emitAgent = (...args) => replies.push(args.at(-1));
+    const initial = {
+        waiting: [{ state: "created",
+            status: "created",
+            health: "" }],
+        checking: [{ state: "running",
+            status: "starting",
+            health: "starting" }],
+        ready: [{ state: "running",
+            status: "healthy",
+            health: "healthy" }],
+    };
+    const running = Object.fromEntries(Object.keys(initial).map(name => [ name, [{ state: "running",
+        status: "healthy",
+        health: "healthy" }]]));
+    page.requestServiceStatus();
+    replies[0]({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: initial });
+    tick(5000);
+    // The next acknowledgement is lost while the other containers start.
+    tick(15000);
+    replies[2]({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: running });
+    replies[1]({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: initial });
+    for (const name of Object.keys(initial)) {
+        card.serviceStatus = page.serviceStatusList[name];
+        assert.equal(card.status, "running", `${name} must show the latest state`);
+        assert.equal(card.health, "healthy");
+        assert.equal(card.isRunning, true);
+    }
+});
+
+test("an action refresh supersedes an earlier poll and errors keep retrying visibly", () => {
+    const { instance: page, tick } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    const replies = [];
+    page.$root.emitAgent = (...args) => replies.push(args.at(-1));
+    page.requestServiceStatus();
+    page.requestServiceStatus();
+    replies[1]({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: { app: [{ state: "running",
+            status: "healthy" }] } });
+    replies[0]({ ok: true,
+        stackStatus: util.CREATED_STACK,
+        serviceStatusList: { app: [{ state: "created",
+            status: "created" }] } });
+    assert.equal(page.serviceStatusList.app[0].state, "running");
+    tick(5000);
+    replies[2]({ ok: false,
+        msg: "Docker unavailable" });
+    assert.equal(page.serviceStatusError, "Docker unavailable");
+    assert.equal(page.serviceStatusList.app[0].state, "running");
+    tick(5000);
+    assert.equal(replies.length, 4);
+});
+
+test("leaving a page stops retries and ignores outstanding status replies", () => {
+    const { instance: page, tick } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    const calls = [];
+    page.$root.emitAgent = (...args) => calls.push(args);
+    page.requestServiceStatus();
+    page.exitAction();
+    calls[0].at(-1)({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: { app: [{ state: "running",
+            status: "healthy" }] } });
+    assert.equal(Object.keys(page.serviceStatusList).length, 0);
+    tick(20000);
+    assert.equal(calls.filter(call => call[1] === "serviceStatusList").length, 1);
 });
 
 test("initial configuration loads immediately while typing waits for three idle seconds", () => {

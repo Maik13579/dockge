@@ -98,6 +98,8 @@ test("service polling keeps container state separate from health and updates sta
             name: "included-2" },
     ]);
     assert.deepEqual(execution.mock.calls[0].arguments[1], [ "compose", "-f", "compose.yaml", "-f", "compose.override.yaml", "ps", "--all", "--format", "json" ]);
+    assert.equal(execution.mock.calls[0].arguments[2]?.timeout, 10000);
+    assert.equal(execution.mock.calls[0].arguments[2]?.maxBuffer, 10 * 1024 * 1024);
     // Older Compose releases return a JSON array instead of JSON lines.
     stdout = JSON.stringify(rows);
     assert.deepEqual(await stack.getServiceStatusList(), services);
@@ -109,6 +111,58 @@ test("service polling keeps container state separate from health and updates sta
     stdout = "";
     assert.equal((await stack.getServiceStatusList()).size, 0);
     assert.equal(stack.status, CREATED_FILE);
+});
+
+for (const command of [ "stop", "down" ] as const) {
+    test(`${command} cancels Update between Pull and Up even without a running terminal`, async (t) => {
+        const { server } = await fixture(t);
+        const stack = new Stack(server, "test");
+        const socket = { endpoint: "" } as DockgeSocket;
+        const execution = t.mock.method(Terminal, "exec", async () => 0);
+        let releaseStatus: () => void;
+        let statusStarted: () => void;
+        const queryingStatus = new Promise<void>(resolve => {
+            statusStarted = resolve;
+        });
+        t.mock.method(stack, "updateStatus", async () => {
+            statusStarted();
+            await new Promise<void>(resolve => {
+                releaseStatus = resolve;
+            });
+            // This snapshot was taken before Stop completed.
+            Object.assign(stack, { _status: RUNNING });
+        });
+        const update = stack.update(socket);
+        const cancelled = assert.rejects(update, /cancelled by Stop/);
+        await queryingStatus;
+        await stack[command](socket);
+        releaseStatus!();
+        await cancelled;
+        const commands = execution.mock.calls.map(call => (call.arguments[4] as string[]).at(-1));
+        assert.deepEqual(commands, [ "pull", command ], "Update must not run Up after shutdown");
+    });
+}
+
+test("successful Updates can repeat and failed Updates release their operation marker", async (t) => {
+    const { server } = await fixture(t);
+    const stack = new Stack(server, "test");
+    const socket = { endpoint: "" } as DockgeSocket;
+    const execution = t.mock.method(Terminal, "exec", async () => 0);
+    const status = t.mock.method(stack, "updateStatus", async () => {
+        Object.assign(stack, { _status: RUNNING });
+    });
+    assert.equal(await stack.update(socket), 0);
+    assert.equal(await stack.update(socket), 0);
+    assert.equal(execution.mock.calls.length, 4);
+    status.mock.mockImplementation(async () => {
+        throw new Error("Status unavailable");
+    });
+    await assert.rejects(stack.update(socket), /Status unavailable/);
+    status.mock.mockImplementation(async () => {
+        Object.assign(stack, { _status: CREATED_FILE });
+    });
+    assert.equal(await stack.update(socket), 0);
+    assert.equal(execution.mock.calls.length, 6, "An inactive stack is pulled without being started");
 });
 
 test("failed polling reports an error instead of reporting running containers as absent", async (t) => {

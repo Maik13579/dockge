@@ -108,6 +108,9 @@
 
                     <!-- Containers -->
                     <h4 class="mb-3">{{ $tc("container", 2) }}</h4>
+                    <div v-if="serviceStatusError" class="text-warning mb-3" role="status">
+                        {{ $t("Unable to refresh container status") }}: {{ serviceStatusError }}
+                    </div>
 
                     <div v-if="isEditMode" class="input-group mb-3">
                         <input
@@ -292,7 +295,6 @@ const validationDelay = 3000;
 
 let yamlErrorTimeout = null;
 
-let serviceStatusTimeout = null;
 let dockerStatsTimeout = null;
 
 export default {
@@ -362,6 +364,9 @@ export default {
 
             },
             serviceStatusList: {},
+            serviceStatusTimeout: null,
+            serviceStatusRequest: 0,
+            serviceStatusError: "",
             dockerStats: {},
             isEditMode: false,
             submitted: false,
@@ -597,6 +602,9 @@ export default {
         this.requestDockerStats();
     },
     unmounted() {
+        this.stopServiceStatusTimeout = true;
+        this.serviceStatusRequest++;
+        clearTimeout(this.serviceStatusTimeout);
         clearTimeout(this.configTimeout);
         clearTimeout(this.configResponseTimeout);
         clearTimeout(yamlErrorTimeout);
@@ -604,8 +612,8 @@ export default {
     },
     methods: {
         startServiceStatusTimeout() {
-            clearTimeout(serviceStatusTimeout);
-            serviceStatusTimeout = setTimeout(async () => {
+            clearTimeout(this.serviceStatusTimeout);
+            this.serviceStatusTimeout = setTimeout(() => {
                 this.requestServiceStatus();
             }, 5000);
         },
@@ -619,11 +627,25 @@ export default {
 
         requestServiceStatus() {
             // Do not request if it is add mode
-            if (this.isAdd) {
+            if (this.isAdd || this.stopServiceStatusTimeout) {
                 return;
             }
 
+            const request = ++this.serviceStatusRequest;
+            clearTimeout(this.serviceStatusTimeout);
+            // A lost acknowledgement must not stop polling forever. Ordinary
+            // polls wait for their reply; only this timeout or an explicit
+            // action refresh supersedes a request that is still pending.
+            this.serviceStatusTimeout = setTimeout(() => {
+                this.serviceStatusError = this.$t("Container status request timed out");
+                this.requestServiceStatus();
+            }, 15000);
             this.$root.emitAgent(this.endpoint, "serviceStatusList", this.stack.name, (res) => {
+                if (request !== this.serviceStatusRequest || this.stopServiceStatusTimeout) {
+                    return;
+                }
+                clearTimeout(this.serviceStatusTimeout);
+                this.serviceStatusError = res.ok ? "" : res.msg;
                 if (res.ok) {
                     this.serviceStatusList = res.serviceStatusList;
                     if (res.stackStatus !== undefined) {
@@ -667,8 +689,9 @@ export default {
         exitAction() {
             console.log("exitAction");
             this.stopServiceStatusTimeout = true;
+            this.serviceStatusRequest++;
             this.stopDockerStatsTimeout = true;
-            clearTimeout(serviceStatusTimeout);
+            clearTimeout(this.serviceStatusTimeout);
             clearTimeout(dockerStatsTimeout);
             clearTimeout(this.configTimeout);
             clearTimeout(this.configResponseTimeout);

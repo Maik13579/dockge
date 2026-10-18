@@ -9,6 +9,9 @@
                 </div>
                 <div v-if="!isEditMode">
                     <span class="badge me-1" :class="bgStyle">{{ status }}</span>
+                    <span v-if="health" class="badge me-1" :class="health === 'unhealthy' ? 'bg-danger' : 'bg-secondary'">
+                        {{ $t("Health") }}: {{ health }}
+                    </span>
 
                     <a v-for="(port, index) in envsubstService.ports" :key="index" :href="parsePort(port).url" target="_blank">
                         <span class="badge me-1 bg-secondary">{{ parsePort(port).display }}</span>
@@ -372,7 +375,17 @@ export default defineComponent({
             if (!this.serviceStatus?.length) {
                 return "N/A";
             }
-            return this.serviceStatus[0].status;
+            const states = this.serviceStatus.map(instance => instance.state || instance.status);
+            // A stopped replica must not hide another replica that is running.
+            return [ "running", "restarting", "paused", "unhealthy", "starting", "healthy" ].find(state => states.includes(state)) || states[0];
+        },
+
+        health() {
+            const checks = (this.serviceStatus || [])
+                .filter(instance => instance.state === "running")
+                .map(instance => instance.health)
+                .filter(Boolean);
+            return [ "unhealthy", "starting", "healthy" ].find(value => checks.includes(value)) || "";
         }
     },
     mounted() {
