@@ -69,7 +69,7 @@ function component(file: string, modules = {}) {
     };
 }
 
-test("Stop remains enabled during Start and late Start replies cannot unlock a pending Down", () => {
+test("Stop remains enabled during Start and late Start replies cannot unlock a pending Stop", () => {
     const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
     page.stack = { name: "test" };
     const calls = [];
@@ -96,7 +96,7 @@ test("Stop remains enabled during Start and late Start replies cannot unlock a p
     assert.equal(page.processing, true);
     assert.equal(page.stopping, true);
     page.stopStack();
-    assert.equal(calls.length, 2, "Do not send duplicate Down requests");
+    assert.equal(calls.length, 2, "Do not send duplicate Stop requests");
     calls[1].at(-1)({ ok: true });
     assert.equal(page.processing, false);
     assert.equal(page.stopping, false);

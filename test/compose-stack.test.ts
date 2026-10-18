@@ -29,19 +29,21 @@ async function fixture(t: TestContext) {
     };
 }
 
-test("Stop runs compose down with both files regardless of the recorded status", async (t) => {
+test("Stop runs stop and Stop & Inactive runs down regardless of the recorded status", async (t) => {
     const { server, stackDirectory } = await fixture(t);
     const execution = t.mock.method(Terminal, "exec", async () => 0);
     const stack = new Stack(server, "test");
     const socket = { endpoint: "" } as DockgeSocket;
-    for (const status of [ UNKNOWN, CREATED_FILE, CREATED_STACK, RUNNING, EXITED ]) {
-        Object.assign(stack, { _status: status });
-        assert.equal(await stack.stop(socket), 0);
-        const args = execution.mock.calls.at(-1)!.arguments;
-        assert.equal(args[3], "docker");
-        assert.deepEqual(args[4], [ "compose", "--progress", "plain", "-f", "compose.yaml", "-f", "compose.override.yaml", "down" ]);
-        assert.equal(args[5], stackDirectory);
-        assert.equal(args[6], true, "Stop must interrupt a pending Compose operation");
+    for (const command of [ "stop", "down" ] as const) {
+        for (const status of [ UNKNOWN, CREATED_FILE, CREATED_STACK, RUNNING, EXITED ]) {
+            Object.assign(stack, { _status: status });
+            assert.equal(await stack[command](socket), 0);
+            const args = execution.mock.calls.at(-1)!.arguments;
+            assert.equal(args[3], "docker");
+            assert.deepEqual(args[4], [ "compose", "--progress", "plain", "-f", "compose.yaml", "-f", "compose.override.yaml", command ]);
+            assert.equal(args[5], stackDirectory);
+            assert.equal(args[6], true, "Both shutdown actions must interrupt a pending Compose operation");
+        }
     }
 });
 
@@ -148,7 +150,7 @@ test("multi-service startup exposes states and logs while Up waits, and Stop can
                 },
             } });
             started();
-        } else if (args.includes("down")) {
+        } else if (args.includes("stop")) {
             finish({ exitCode: 0 });
         }
     });
@@ -198,7 +200,7 @@ test("multi-service startup exposes states and logs while Up waits, and Stop can
     assert.equal(startReply.ok, false);
     assert.match(startReply.msg, /cancelled by Stop/);
     assert.equal(stopReply.ok, true);
-    assert.deepEqual(commands.at(-1), [ "compose", "--progress", "plain", "-f", "compose.yaml", "-f", "compose.override.yaml", "down" ]);
+    assert.deepEqual(commands.at(-1), [ "compose", "--progress", "plain", "-f", "compose.yaml", "-f", "compose.override.yaml", "stop" ]);
 });
 
 test("cached polling clears running status after down and drops vanished external projects", async (t) => {

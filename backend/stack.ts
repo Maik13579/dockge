@@ -483,7 +483,7 @@ export class Stack {
 
     async stop(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path, true);
+        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to stop, please check the terminal output for more information.");
         }

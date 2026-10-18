@@ -788,7 +788,7 @@ export default {
 
         finishOperation(request, res) {
             // Stop supersedes a pending Start. Its late reply must not unlock
-            // the controls while Down is still running.
+            // the controls while shutdown is still running.
             if (request !== this.operationRequest) {
                 return false;
             }
