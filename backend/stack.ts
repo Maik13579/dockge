@@ -9,8 +9,7 @@ import {
     COMBINED_TERMINAL_COLS,
     COMBINED_TERMINAL_ROWS,
     CREATED_FILE,
-    CREATED_STACK,
-    EXITED, getCombinedTerminalName,
+    getCombinedTerminalName,
     getComposeTerminalName, getContainerExecTerminalName,
     PROGRESS_TERMINAL_ROWS,
     RUNNING, TERMINAL_ROWS,
@@ -20,6 +19,7 @@ import { InteractiveTerminal, Terminal } from "./terminal";
 import childProcessAsync from "promisify-child-process";
 import { Settings } from "./settings";
 import { resolveComposeConfig } from "./compose-config";
+import { composeStatus } from "./compose-status";
 
 export class Stack {
 
@@ -320,7 +320,7 @@ export class Stack {
 
         // Use cached stack list?
         if (useCacheForManaged && this.managedStackList.size > 0) {
-            stackList = this.managedStackList;
+            stackList = new Map(this.managedStackList);
         } else {
             stackList = new Map<string, Stack>();
 
@@ -350,6 +350,12 @@ export class Stack {
 
             // Cache by copying
             this.managedStackList = new Map(stackList);
+        }
+
+        // Cached Stack instances retain the previous poll's status. Reset managed
+        // entries before merging Docker's current projects, including after down.
+        for (const stack of stackList.values()) {
+            stack._status = CREATED_FILE;
         }
 
         // Get status from docker compose ls
@@ -413,17 +419,7 @@ export class Stack {
      * @param status
      */
     static statusConvert(status : string) : number {
-        if (status.startsWith("created")) {
-            return CREATED_STACK;
-        } else if (status.includes("exited")) {
-            // If one of the service is exited, we consider the stack is exited
-            return EXITED;
-        } else if (status.startsWith("running")) {
-            // If there is no exited services, there should be only running services
-            return RUNNING;
-        } else {
-            return UNKNOWN;
-        }
+        return composeStatus(status);
     }
 
     static async getStack(server: DockgeServer, stackName: string, skipFSOperations = false) : Promise<Stack> {
@@ -489,7 +485,7 @@ export class Stack {
 
     async stop(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop"), this.path);
+        let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path);
         if (exitCode !== 0) {
             throw new Error("Failed to stop, please check the terminal output for more information.");
         }

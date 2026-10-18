@@ -41,7 +41,7 @@
                         {{ $t("updateStack") }}
                     </button>
 
-                    <button v-if="!isEditMode && active" class="btn btn-normal" :disabled="processing" @click="stopStack">
+                    <button v-if="!isEditMode" class="btn btn-normal" :disabled="processing" @click="stopStack">
                         <font-awesome-icon icon="stop" class="me-1" />
                         {{ $t("stopStack") }}
                     </button>
@@ -860,8 +860,8 @@ export default {
             }
         },
 
-        /** Resolve drafts after typing pauses, ignoring responses for older edits. */
-        scheduleConfigResolution() {
+        /** Load services immediately when viewing a stack; debounce editor changes. */
+        scheduleConfigResolution(delay = this.isEditMode ? validationDelay : 0) {
             clearTimeout(this.configTimeout);
             clearTimeout(this.configResponseTimeout);
             this.configError = "";
@@ -889,7 +889,7 @@ export default {
                         this.resolvedEditorServices = Object.fromEntries(Object.entries(this.resolvedConfig.services || {}).map(([ name, service ]) => [ name, editableService(service) ]));
                     }
                 });
-            }, validationDelay);
+            }, delay);
         },
 
         /** Keep inherited edits in local overrides instead of flattening includes. */
