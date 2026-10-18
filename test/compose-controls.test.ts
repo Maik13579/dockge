@@ -141,6 +141,35 @@ test("a service Start stays enabled while bulk startup waits and only locks its 
     assert.equal(page.stackBusy, false);
 });
 
+test("a single-service card has Start when stopped and Stop/Restart when running", () => {
+    const { instance: page } = component("../frontend/src/pages/Compose.vue");
+    const { instance: card, template } = component("../frontend/src/components/Container.vue");
+    page.jsonConfig.services = { only: {} };
+    page.processing = false;
+    card.$parent = { $parent: page };
+    card.name = "only";
+    card.isEditMode = false;
+    const visible = event => {
+        const button = template.match(new RegExp(`<button\\b(?:[^">]|"[^"]*")*@click="${event}"(?:[^">]|"[^"]*")*>`))[0];
+        return vm.runInNewContext(button.match(/v-if="([^"]+)"/)[1], card);
+    };
+    card.serviceStatus = [{ state: "created",
+        status: "created" }];
+    assert.equal(visible("startService"), true);
+    assert.equal(visible("stopService"), false);
+    assert.equal(visible("restartService"), false);
+    assert.equal(card.processing, false);
+    card.serviceStatus = [{ state: "running",
+        status: "healthy" }];
+    assert.equal(visible("startService"), false);
+    assert.equal(visible("stopService"), true);
+    assert.equal(visible("restartService"), true);
+    card.isEditMode = true;
+    assert.equal(visible("startService"), false);
+    assert.equal(visible("stopService"), false);
+    assert.equal(visible("restartService"), false);
+});
+
 test("Stop supersedes service operations without letting their late replies unlock shutdown", () => {
     const { instance: page } = component("../frontend/src/pages/Compose.vue");
     page.stack = { name: "test" };
