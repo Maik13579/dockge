@@ -102,6 +102,89 @@ test("Stop remains enabled during Start and late Start replies cannot unlock a p
     assert.equal(page.stopping, false);
 });
 
+test("a service Start stays enabled while bulk startup waits and only locks its own service", () => {
+    const { instance: page } = component("../frontend/src/pages/Compose.vue");
+    const { instance: card, template } = component("../frontend/src/components/Container.vue");
+    page.stack = { name: "test" };
+    page.jsonConfig.services = { first: {},
+        second: {} };
+    page.processing = false;
+    card.$parent = { $parent: page };
+    card.name = "first";
+    card.isEditMode = false;
+    card.serviceStatus = [{ state: "created",
+        status: "created" }];
+    const calls = [];
+    page.$root.emitAgent = (...args) => calls.push(args);
+    page.$root.toastRes = () => {};
+    page.requestServiceStatus = () => {};
+    page.startStack();
+    const bulkRequest = page.operationRequest;
+    const button = template.match(/<button\b(?:[^">]|"[^"]*")*@click="startService"(?:[^">]|"[^"]*")*>/)[0];
+    const visible = button.match(/v-if="([^"]+)"/)[1];
+    const disabled = button.match(/:disabled="([^"]+)"/)[1];
+    assert.equal(page.processing, true);
+    assert.equal(vm.runInNewContext(visible, card), true);
+    assert.equal(vm.runInNewContext(disabled, card), false, "A waiting bulk Up must not disable the service button");
+    page.startService("first");
+    assert.equal(card.processing, true);
+    card.name = "second";
+    assert.equal(card.processing, false, "Other services must remain controllable");
+    assert.equal(page.operationRequest, bulkRequest, "A service action must not supersede the bulk action");
+    page.startService("first");
+    assert.equal(calls.length, 2, "Duplicate clicks on one service must be ignored");
+    calls[1].at(-1)({ ok: true });
+    assert.equal(page.processing, true, "The bulk request is still pending");
+    card.name = "first";
+    assert.equal(card.processing, false);
+    calls[0].at(-1)({ ok: true });
+    assert.equal(page.stackBusy, false);
+});
+
+test("Stop supersedes service operations without letting their late replies unlock shutdown", () => {
+    const { instance: page } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    page.processing = false;
+    const calls = [];
+    page.$root.emitAgent = (...args) => calls.push(args);
+    page.$root.toastRes = () => {};
+    page.requestServiceStatus = () => {};
+    page.startStack();
+    page.startService("first");
+    page.startService("second");
+    page.stopStack();
+    calls[0].at(-1)({ ok: false,
+        msg: "cancelled" });
+    calls[1].at(-1)({ ok: false,
+        msg: "cancelled" });
+    calls[2].at(-1)({ ok: false,
+        msg: "cancelled" });
+    assert.equal(page.stopping, true);
+    assert.equal(page.processing, true);
+    assert.equal(Object.keys(page.serviceOperations).length, 0);
+    page.startService("third");
+    assert.equal(calls.length, 4, "New service actions must wait until shutdown finishes");
+    calls[3].at(-1)({ ok: true });
+    assert.equal(page.stopping, false);
+    assert.equal(page.stackBusy, false);
+});
+
+test("a partially running stack can retry Up instead of being limited to Restart", () => {
+    const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    page.processing = false;
+    page.$root.completeStackList.test_ = { status: util.RUNNING };
+    page.serviceStatusList = {
+        ready: [{ state: "running" }],
+        waiting: [{ state: "created" }],
+    };
+    const button = template.match(/<button[^>]*@click="startStack"[^>]*>/)[0];
+    const visible = button.match(/v-if="([^"]+)"/)[1];
+    assert.equal(vm.runInNewContext(visible, page), true);
+    page.serviceStatusList.waiting = [{ state: "running" }];
+    assert.equal(vm.runInNewContext(visible, page), false);
+});
+
 test("service polling updates the stack badge and controls without waiting for the global poll", () => {
     const { instance: page } = component("../frontend/src/pages/Compose.vue");
     page.stack = { name: "test" };

@@ -40,7 +40,7 @@ test("Stop runs stop and Stop & Inactive runs down regardless of the recorded st
             assert.equal(await stack[command](socket), 0);
             const args = execution.mock.calls.at(-1)!.arguments;
             assert.equal(args[3], "docker");
-            assert.deepEqual(args[4], [ "compose", "--progress", "plain", "-f", "compose.yaml", "-f", "compose.override.yaml", command ]);
+            assert.deepEqual(args[4], [ "compose", "--progress", "plain", command ]);
             assert.equal(args[5], stackDirectory);
             assert.equal(args[6], true, "Both shutdown actions must interrupt a pending Compose operation");
         }
@@ -97,7 +97,7 @@ test("service polling keeps container state separate from health and updates sta
             health: "unhealthy",
             name: "included-2" },
     ]);
-    assert.deepEqual(execution.mock.calls[0].arguments[1], [ "compose", "-f", "compose.yaml", "-f", "compose.override.yaml", "ps", "--all", "--format", "json" ]);
+    assert.deepEqual(execution.mock.calls[0].arguments[1], [ "compose", "ps", "--all", "--format", "json" ]);
     assert.equal(execution.mock.calls[0].arguments[2]?.timeout, 10000);
     assert.equal(execution.mock.calls[0].arguments[2]?.maxBuffer, 10 * 1024 * 1024);
     // Older Compose releases return a JSON array instead of JSON lines.
@@ -196,7 +196,9 @@ test("multi-service startup exposes states and logs while Up waits, and Stop can
         commands.push(args);
         names.add(this.name);
         const finish = Reflect.get(this, "exit");
-        if (args.includes("up")) {
+        if (args.includes("up") && (Reflect.get(this, "operationName") as string).includes(":service:")) {
+            finish({ exitCode: 0 });
+        } else if (args.includes("up")) {
             Object.assign(this, { _ptyProcess: {
                 write: (input: string) => {
                     assert.equal(input, "\x03");
@@ -246,6 +248,13 @@ test("multi-service startup exposes states and logs while Up waits, and Stop can
     assert.equal(statusReply.serviceStatusList.docker_manager[0].state, "running");
     assert.equal(statusReply.serviceStatusList.waiting[0].state, "created");
     assert.equal(commands.some(args => args.includes("logs")), true, "Logs must attach before Up completes");
+    let serviceReply;
+    await agent.eventList.get("startService")!("test", "waiting", (res: unknown) => {
+        serviceReply = res;
+    });
+    assert.equal(serviceReply.ok, true, "An individual service must start while bulk Up is waiting");
+    assert.equal(startReply, undefined, "Starting a service must not cancel the rest of the stack startup");
+    assert.equal(commands.some(args => args.join(" ") === "compose --progress plain up -d waiting"), true);
     let stopReply;
     await agent.eventList.get("stopStack")!("test", (res: unknown) => {
         stopReply = res;
@@ -254,7 +263,33 @@ test("multi-service startup exposes states and logs while Up waits, and Stop can
     assert.equal(startReply.ok, false);
     assert.match(startReply.msg, /cancelled by Stop/);
     assert.equal(stopReply.ok, true);
-    assert.deepEqual(commands.at(-1), [ "compose", "--progress", "plain", "-f", "compose.yaml", "-f", "compose.override.yaml", "stop" ]);
+    assert.deepEqual(commands.at(-1), [ "compose", "--progress", "plain", "stop" ]);
+});
+
+test("runtime commands preserve Compose file discovery and environment file selection", async (t) => {
+    const { server, stackDirectory } = await fixture(t);
+    await fs.writeFile(path.join(server.stacksDir, "global.env"), "GLOBAL=value\n");
+    await fs.writeFile(path.join(stackDirectory, ".env"), "COMPOSE_FILE=compose.yaml:compose.production.yaml\n");
+    const stack = new Stack(server, "test");
+    assert.deepEqual(stack.getComposeOptions("up", "-d", "--remove-orphans"), [
+        "compose", "--env-file", "../global.env", "--env-file", "./.env",
+        "--progress", "plain", "up", "-d", "--remove-orphans",
+    ]);
+    assert.deepEqual(stack.getComposeOptions("ps", "--all", "--format", "json"), [
+        "compose", "--env-file", "../global.env", "--env-file", "./.env",
+        "ps", "--all", "--format", "json",
+    ]);
+});
+
+test("the editors choose default Compose filenames in the same order as Docker Compose", async (t) => {
+    const { server, stackDirectory } = await fixture(t);
+    await fs.rm(path.join(stackDirectory, "compose.yaml"));
+    await fs.writeFile(path.join(stackDirectory, "compose.yml"), "services: {}\n");
+    await fs.writeFile(path.join(stackDirectory, "docker-compose.yaml"), "services: {}\n");
+    await fs.writeFile(path.join(stackDirectory, "compose.override.yml"), "# preferred overrides\n");
+    const stack = new Stack(server, "test");
+    assert.equal(Reflect.get(stack, "_composeFileName"), "compose.yml");
+    assert.equal(stack.composeOverrideYAML, "# preferred overrides\n");
 });
 
 test("cached polling clears running status after down and drops vanished external projects", async (t) => {

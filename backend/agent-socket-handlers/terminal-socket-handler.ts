@@ -128,9 +128,11 @@ export class TerminalSocketHandler extends AgentSocketHandler {
                     throw new ValidationError("Terminal name must be a string.");
                 }
 
-                const terminal = Terminal.getTerminal(terminalName);
-                terminal?.join(socket);
-                let buffer : string = terminal?.getBuffer() ?? "";
+                const terminals = Terminal.getTerminals(terminalName);
+                for (const terminal of terminals) {
+                    terminal.join(socket);
+                }
+                let buffer : string = terminals.map(terminal => terminal.getBuffer()).join("");
 
                 if (!buffer) {
                     log.debug("console", "No buffer found.");
@@ -183,15 +185,15 @@ export class TerminalSocketHandler extends AgentSocketHandler {
                     throw new Error("Command must be a number.");
                 }
 
-                let terminal = Terminal.getTerminal(terminalName);
-
-                // log.info("terminal", terminal);
-                if (terminal instanceof Terminal) {
+                const terminals = Terminal.getTerminals(terminalName);
+                if (terminals.length === 0) {
+                    throw new Error(`${terminalName} Terminal not found.`);
+                }
+                for (const terminal of terminals) {
+                    // log.info("terminal", terminal);
                     //log.debug("terminalInput", "Terminal found, writing to terminal.");
                     terminal.rows = rows;
                     terminal.cols = cols;
-                } else {
-                    throw new Error(`${terminalName} Terminal not found.`);
                 }
             } catch (e) {
                 log.debug("terminalResize",

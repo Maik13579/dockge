@@ -16,11 +16,13 @@ import { log } from "./log";
  */
 export class Terminal {
     protected static terminalMap : Map<string, Terminal> = new Map();
+    protected static shutdowns: Set<string> = new Set();
 
     protected _ptyProcess? : pty.IPty;
     protected server : DockgeServer;
     protected buffer : LimitQueue<string> = new LimitQueue(100);
     protected _name : string;
+    protected operationName: string;
 
     protected file : string;
     protected args : string | string[];
@@ -38,15 +40,16 @@ export class Terminal {
 
     protected socketList : Record<string, DockgeSocket> = {};
 
-    constructor(server : DockgeServer, name : string, file : string, args : string | string[], cwd : string) {
+    constructor(server : DockgeServer, name : string, file : string, args : string | string[], cwd : string, operationName = name) {
         this.server = server;
         this._name = name;
+        this.operationName = operationName;
         //this._name = "terminal-" + Date.now() + "-" + getCryptoRandomInt(0, 1000000);
         this.file = file;
         this.args = args;
         this.cwd = cwd;
 
-        Terminal.terminalMap.set(this.name, this);
+        Terminal.terminalMap.set(this.operationName, this);
     }
 
     get rows() {
@@ -163,8 +166,8 @@ export class Terminal {
         // Remove all clients
         this.socketList = {};
 
-        if (Terminal.getTerminal(this.name) === this) {
-            Terminal.terminalMap.delete(this.name);
+        if (Terminal.getTerminal(this.operationName) === this) {
+            Terminal.terminalMap.delete(this.operationName);
         }
         log.debug("Terminal", "Terminal " + this.name + " exited with code " + res.exitCode);
 
@@ -245,6 +248,11 @@ export class Terminal {
         return Terminal.terminalMap.get(name);
     }
 
+    /** Commands can run independently while sharing one progress display. */
+    public static getTerminals(name: string): Terminal[] {
+        return [ ...Terminal.terminalMap.values() ].filter(terminal => terminal.name === name);
+    }
+
     public static getOrCreateTerminal(server : DockgeServer, name : string, file : string, args : string | string[], cwd : string) : Terminal {
         // Since exited terminal will be removed from the map, it is safe to get the terminal from the map
         let terminal = Terminal.getTerminal(name);
@@ -254,34 +262,49 @@ export class Terminal {
         return terminal;
     }
 
-    public static async exec(server : DockgeServer, socket : DockgeSocket | undefined, terminalName : string, file : string, args : string | string[], cwd : string, interrupt = false) : Promise<number> {
-        const previous = Terminal.getTerminal(terminalName);
-        if (previous && interrupt) {
-            await previous.interrupt();
+    public static async exec(server : DockgeServer, socket : DockgeSocket | undefined, terminalName : string, file : string, args : string | string[], cwd : string, interrupt = false, operationName = terminalName) : Promise<number> {
+        if (Terminal.shutdowns.has(terminalName)) {
+            throw new Error("The stack is stopping, please wait for it to finish.");
         }
-        return new Promise((resolve, reject) => {
-            // check if terminal exists
-            if (Terminal.terminalMap.has(terminalName)) {
-                reject(new Error("Another operation is already running, please try again later."));
-                return;
+        if (interrupt) {
+            // Keep the group locked across process exits and the following
+            // shutdown command, including while awaiting multiple children.
+            Terminal.shutdowns.add(terminalName);
+        }
+        try {
+            if (interrupt) {
+                await Promise.all(Terminal.getTerminals(terminalName).map(terminal => terminal.interrupt()));
             }
-
-            let terminal = new Terminal(server, terminalName, file, args, cwd);
-            terminal.rows = PROGRESS_TERMINAL_ROWS;
-
-            if (socket) {
-                terminal.join(socket);
-            }
-
-            terminal.onExit((exitCode : number) => {
-                if (terminal.interrupted) {
-                    reject(new Error("Compose operation cancelled by Stop."));
-                } else {
-                    resolve(exitCode);
+            return await new Promise<number>((resolve, reject) => {
+                const running = Terminal.getTerminals(terminalName);
+                if (Terminal.terminalMap.has(operationName)
+                    || (operationName === terminalName && running.length > 0)
+                    || running.some(terminal => terminal.interrupted)) {
+                    reject(new Error("Another operation is already running, please try again later."));
+                    return;
                 }
+
+                let terminal = new Terminal(server, terminalName, file, args, cwd, operationName);
+                terminal.rows = PROGRESS_TERMINAL_ROWS;
+
+                if (socket) {
+                    terminal.join(socket);
+                }
+
+                terminal.onExit((exitCode : number) => {
+                    if (terminal.interrupted) {
+                        reject(new Error("Compose operation cancelled by Stop."));
+                    } else {
+                        resolve(exitCode);
+                    }
+                });
+                terminal.start();
             });
-            terminal.start();
-        });
+        } finally {
+            if (interrupt) {
+                Terminal.shutdowns.delete(terminalName);
+            }
+        }
     }
 
     public static getTerminalCount() {

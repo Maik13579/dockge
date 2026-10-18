@@ -11,32 +11,32 @@
 
             <div v-if="stack.isManagedByDockge" class="mb-3">
                 <div class="btn-group me-2" role="group">
-                    <button v-if="isEditMode" class="btn btn-primary" :disabled="processing" @click="deployStack">
+                    <button v-if="isEditMode" class="btn btn-primary" :disabled="stackBusy" @click="deployStack">
                         <font-awesome-icon icon="rocket" class="me-1" />
                         {{ $t("deployStack") }}
                     </button>
 
-                    <button v-if="isEditMode" class="btn btn-normal" :disabled="processing" @click="saveStack">
+                    <button v-if="isEditMode" class="btn btn-normal" :disabled="stackBusy" @click="saveStack">
                         <font-awesome-icon icon="save" class="me-1" />
                         {{ $t("saveStackDraft") }}
                     </button>
 
-                    <button v-if="!isEditMode" class="btn btn-secondary" :disabled="processing" @click="enableEditMode">
+                    <button v-if="!isEditMode" class="btn btn-secondary" :disabled="stackBusy" @click="enableEditMode">
                         <font-awesome-icon icon="pen" class="me-1" />
                         {{ $t("editStack") }}
                     </button>
 
-                    <button v-if="!isEditMode && !active" class="btn btn-primary" :disabled="processing" @click="startStack">
+                    <button v-if="!isEditMode && (!active || hasStoppedServices)" class="btn btn-primary" :disabled="stackBusy" @click="startStack">
                         <font-awesome-icon icon="play" class="me-1" />
                         {{ $t("startStack") }}
                     </button>
 
-                    <button v-if="!isEditMode && active" class="btn btn-normal " :disabled="processing" @click="restartStack">
+                    <button v-if="!isEditMode && active" class="btn btn-normal " :disabled="stackBusy" @click="restartStack">
                         <font-awesome-icon icon="rotate" class="me-1" />
                         {{ $t("restartStack") }}
                     </button>
 
-                    <button v-if="!isEditMode" class="btn btn-normal" :disabled="processing" @click="updateStack">
+                    <button v-if="!isEditMode" class="btn btn-normal" :disabled="stackBusy" @click="updateStack">
                         <font-awesome-icon icon="cloud-arrow-down" class="me-1" />
                         {{ $t("updateStack") }}
                     </button>
@@ -54,8 +54,8 @@
                     </BDropdown>
                 </div>
 
-                <button v-if="isEditMode && !isAdd" class="btn btn-normal" :disabled="processing" @click="discardStack">{{ $t("discardStack") }}</button>
-                <button v-if="!isEditMode" class="btn btn-danger" :disabled="processing" @click="showDeleteDialog = !showDeleteDialog">
+                <button v-if="isEditMode && !isAdd" class="btn btn-normal" :disabled="stackBusy" @click="discardStack">{{ $t("discardStack") }}</button>
+                <button v-if="!isEditMode" class="btn btn-danger" :disabled="stackBusy" @click="showDeleteDialog = !showDeleteDialog">
                     <font-awesome-icon icon="trash" class="me-1" />
                     {{ $t("deleteStack") }}
                 </button>
@@ -356,6 +356,8 @@ export default {
             stopping: false,
             operationRunning: false,
             operationRequest: 0,
+            serviceOperations: Object.create(null),
+            serviceOperationRequest: 0,
             showProgressTerminal: false,
             progressTerminalRows: PROGRESS_TERMINAL_ROWS,
             combinedTerminalRows: COMBINED_TERMINAL_ROWS,
@@ -377,6 +379,10 @@ export default {
         };
     },
     computed: {
+        stackBusy() {
+            return this.processing || Object.keys(this.serviceOperations).length > 0;
+        },
+
         activeYAML: {
             get() {
                 return this.activeDocument === "compose" ? this.stack.composeYAML : this.stack.composeOverrideYAML;
@@ -468,6 +474,11 @@ export default {
 
         active() {
             return this.status === RUNNING;
+        },
+
+        hasStoppedServices() {
+            return Object.values(this.serviceStatusList).some(instances => instances.some(instance =>
+                [ "created", "exited", "dead" ].includes(instance.state || instance.status)));
         },
 
         terminalName() {
@@ -800,6 +811,9 @@ export default {
 
         beginOperation(stopping) {
             const request = ++this.operationRequest;
+            if (stopping) {
+                this.serviceOperations = Object.create(null);
+            }
             this.processing = true;
             this.stopping = stopping;
             this.operationRunning = true;
@@ -823,14 +837,33 @@ export default {
             return true;
         },
 
-        runStackOperation(event, serviceName) {
+        runStackOperation(event) {
             if (this.stopping) {
                 return;
             }
             const request = this.beginOperation(event === "stopStack" || event === "downStack");
-            const args = serviceName === undefined ? [] : [ serviceName ];
-            this.$root.emitAgent(this.endpoint, event, this.stack.name, ...args, (res) => {
+            this.$root.emitAgent(this.endpoint, event, this.stack.name, (res) => {
                 this.finishOperation(request, res);
+            });
+        },
+
+        runServiceOperation(event, serviceName) {
+            if (this.stopping || this.serviceOperations[serviceName]
+                || (this.processing && !this.operationRunning)) {
+                return;
+            }
+            const request = ++this.serviceOperationRequest;
+            this.serviceOperations[serviceName] = request;
+            this.showProgressTerminal = true;
+            this.bindTerminal();
+            this.$nextTick(() => this.$refs.progressTerminal?.updateTerminalSize());
+            this.$root.emitAgent(this.endpoint, event, this.stack.name, serviceName, (res) => {
+                if (this.serviceOperations[serviceName] !== request) {
+                    return;
+                }
+                delete this.serviceOperations[serviceName];
+                this.$root.toastRes(res);
+                this.requestServiceStatus();
             });
         },
 
@@ -991,15 +1024,15 @@ export default {
         },
 
         startService(serviceName) {
-            this.runStackOperation("startService", serviceName);
+            this.runServiceOperation("startService", serviceName);
         },
 
         stopService(serviceName) {
-            this.runStackOperation("stopService", serviceName);
+            this.runServiceOperation("stopService", serviceName);
         },
 
         restartService(serviceName) {
-            this.runStackOperation("restartService", serviceName);
+            this.runServiceOperation("restartService", serviceName);
         },
     }
 };

@@ -316,7 +316,9 @@ export default defineComponent({
         },
 
         processing() {
-            return this.$parent.$parent.processing;
+            const page = this.$parent.$parent;
+            return page.stopping || !!page.serviceOperations[this.name]
+                || (page.processing && !page.operationRunning);
         },
 
         isRunning() {

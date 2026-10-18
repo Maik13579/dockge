@@ -53,7 +53,7 @@ export class Stack {
                     break;
                 }
             }
-            for (const filename of [ "compose.override.yaml", "compose.override.yml", "docker-compose.override.yaml", "docker-compose.override.yml" ]) {
+            for (const filename of [ "compose.override.yml", "compose.override.yaml", "docker-compose.override.yml", "docker-compose.override.yaml" ]) {
                 if (fs.existsSync(path.join(this.path, filename))) {
                     this._composeOverrideFileName = filename;
                     break;
@@ -459,12 +459,8 @@ export class Stack {
             // in the embedded progress terminal. Keep every progress line.
             options.push("--progress", "plain");
         }
-        if (fs.existsSync(path.join(this.path, this._composeFileName))) {
-            options.push("-f", this._composeFileName);
-            if (fs.existsSync(path.join(this.path, this._composeOverrideFileName))) {
-                options.push("-f", this._composeOverrideFileName);
-            }
-        }
+        // Let Compose discover its files and honor COMPOSE_FILE as before.
+        // Standard override files are loaded automatically by Compose.
         options.push(command, ...extraOptions);
         if (fs.existsSync(path.join(this.server.stacksDir, "global.env"))) {
             if (fs.existsSync(path.join(this.path, ".env"))) {
@@ -637,7 +633,7 @@ export class Stack {
 
     async startService(socket: DockgeSocket, serviceName: string) {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("up", "-d", serviceName), this.path);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("up", "-d", serviceName), this.path, false, `${terminalName}:service:${serviceName}`);
         if (exitCode !== 0) {
             throw new Error(`Failed to start service ${serviceName}, please check logs for more information.`);
         }
@@ -647,7 +643,7 @@ export class Stack {
 
     async stopService(socket: DockgeSocket, serviceName: string): Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop", serviceName), this.path);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop", serviceName), this.path, false, `${terminalName}:service:${serviceName}`);
         if (exitCode !== 0) {
             throw new Error(`Failed to stop service ${serviceName}, please check logs for more information.`);
         }
@@ -657,7 +653,7 @@ export class Stack {
 
     async restartService(socket: DockgeSocket, serviceName: string): Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
-        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("restart", serviceName), this.path);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("restart", serviceName), this.path, false, `${terminalName}:service:${serviceName}`);
         if (exitCode !== 0) {
             throw new Error(`Failed to restart service ${serviceName}, please check logs for more information.`);
         }

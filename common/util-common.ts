@@ -109,9 +109,9 @@ export const ERROR_TYPE_VALIDATION = 1;
 
 export const acceptedComposeFileNames = [
     "compose.yaml",
-    "docker-compose.yaml",
-    "docker-compose.yml",
     "compose.yml",
+    "docker-compose.yml",
+    "docker-compose.yaml",
 ];
 
 /**

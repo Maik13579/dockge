@@ -126,3 +126,88 @@ test("reopening a terminal returns its buffer and subscribes to subsequent live 
         terminal.finish();
     }
 });
+
+test("service commands run during bulk Up, retain its progress, and all stop before Down", async (t) => {
+    const server = {} as DockgeServer;
+    const name = "compose-parallel-services-test";
+    const processes = new Map<string, { terminal: Terminal, finish: (res: { exitCode: number }) => void }>();
+    const interrupted: string[] = [];
+    let shutdownStarted: () => void;
+    const shuttingDown = new Promise<void>(resolve => {
+        shutdownStarted = resolve;
+    });
+    t.mock.method(Terminal.prototype, "start", function (this: Terminal) {
+        const key = Reflect.get(this, "operationName") as string;
+        const finish = Reflect.get(this, "exit");
+        processes.set(key, { terminal: this,
+            finish });
+        Object.assign(this, { _ptyProcess: { write: (input: string) => {
+            assert.equal(input, "\x03");
+            interrupted.push(key);
+        } } });
+        if ((Reflect.get(this, "args") as string[]).includes("down")) {
+            shutdownStarted();
+        }
+    });
+    t.after(() => {
+        for (const process of processes.values()) {
+            process.finish({ exitCode: 0 });
+        }
+    });
+    const up = Terminal.exec(server, undefined, name, "docker", [ "compose", "up", "-d" ], "/");
+    const first = Terminal.exec(server, undefined, name, "docker", [ "compose", "up", "-d", "first" ], "/", false, `${name}:service:first`);
+    const second = Terminal.exec(server, undefined, name, "docker", [ "compose", "up", "-d", "second" ], "/", false, `${name}:service:second`);
+    assert.equal(Terminal.getTerminals(name).length, 3);
+    assert.equal(Terminal.getTerminal(name), processes.get(name)?.terminal);
+    await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/", false, `${name}:service:first`), /Another operation/);
+    await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/"), /Another operation/);
+    const cancelled = [ up, first, second ].map(promise => assert.rejects(promise, /cancelled by Stop/));
+    const down = Terminal.exec(server, undefined, name, "docker", [ "compose", "down" ], "/", true);
+    assert.equal(interrupted.length, 3);
+    await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/", false, `${name}:service:third`), /stack is stopping/);
+    for (const process of processes.values()) {
+        process.finish({ exitCode: 130 });
+    }
+    await shuttingDown;
+    await Promise.all(cancelled);
+    assert.equal(Terminal.getTerminals(name).length, 1);
+    await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/", false, `${name}:service:third`), /stack is stopping/);
+    processes.get(name)!.finish({ exitCode: 0 });
+    assert.equal(await down, 0);
+    assert.equal(Terminal.getTerminals(name).length, 0);
+    const retry = Terminal.exec(server, undefined, name, "docker", [], "/", false, `${name}:service:third`);
+    processes.get(`${name}:service:third`)!.finish({ exitCode: 0 });
+    assert.equal(await retry, 0, "The shutdown lock must be released after Down");
+});
+
+test("reopening the shared progress display subscribes to every service command", () => {
+    const server = {} as DockgeServer;
+    const events: unknown[][] = [];
+    const socket = { id: "reopened-services",
+        userID: 1,
+        emitAgent: (...args: unknown[]) => events.push(args) } as unknown as DockgeSocket;
+    const agent = new AgentSocket();
+    new TerminalSocketHandler().create(socket, server, agent);
+    const name = "compose-service-progress-test";
+    const terminals = [ "first", "second" ].map(service => new TestTerminal(server, name, "docker", [], "/", `${name}:service:${service}`));
+    try {
+        terminals[0].send("First service starting\r\n");
+        terminals[1].send("Second service starting\r\n");
+        let buffer = "";
+        agent.call("terminalJoin", name, (res: { buffer: string }) => {
+            buffer = res.buffer;
+        });
+        assert.match(buffer, /First service starting/);
+        assert.match(buffer, /Second service starting/);
+        terminals[0].send("First service started\r\n");
+        terminals[1].send("Second service started\r\n");
+        assert.deepEqual(events, [
+            [ "terminalWrite", name, "First service started\r\n" ],
+            [ "terminalWrite", name, "Second service started\r\n" ],
+        ]);
+        terminals[0].finish();
+        assert.equal(Terminal.getTerminals(name).length, 1, "One service exiting must not unregister the other");
+    } finally {
+        terminals.forEach(terminal => terminal.finish());
+    }
+});
