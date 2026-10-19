@@ -104,6 +104,7 @@
                     </div>
                 </div>
             </div>
+            <Images />
         </div>
     </transition>
     <router-view ref="child" />
@@ -111,10 +112,11 @@
 
 <script>
 import { statusNameShort } from "../../../common/util-common";
+import Images from "../components/Images.vue";
 
 export default {
     components: {
-
+        Images,
     },
     props: {
         calculatedHeight: {

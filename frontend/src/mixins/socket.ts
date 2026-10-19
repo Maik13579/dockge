@@ -4,6 +4,7 @@ import { defineComponent } from "vue";
 import jwtDecode from "jwt-decode";
 import { Terminal } from "@xterm/xterm";
 import { AgentSocket } from "../../../common/agent-socket";
+import { updateImageJob, disconnectImages } from "../images";
 
 let socket : Socket;
 
@@ -47,6 +48,8 @@ export default defineComponent({
             agentList: {
 
             },
+            agentCapabilities: {},
+            imageJobs: {},
         };
     },
     computed: {
@@ -281,6 +284,17 @@ export default defineComponent({
                 }
             });
 
+            socket.on("agentCapabilities", (res) => {
+                this.agentCapabilities[res.endpoint] = res.imageManagement === true;
+            });
+            socket.on("imageJob", job => updateImageJob(this, job));
+            agentSocket.on("imagePullProgress", (res) => {
+                if (this.imageJobs[res.id]) {
+                    this.imageJobs[res.id].message = res.message;
+                }
+            });
+            socket.on("disconnect", () => disconnectImages(this));
+
             socket.on("agentList", (res) => {
                 if (res.ok) {
                     this.agentList = res.agentList;
@@ -379,6 +393,8 @@ export default defineComponent({
          * @returns {void}
          */
         logout() {
+            disconnectImages(this);
+            this.imageJobs = {};
             socket.emit("logout", () => { });
             this.storage().removeItem("token");
             this.socketIO.token = null;

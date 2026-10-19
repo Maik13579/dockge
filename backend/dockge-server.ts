@@ -37,6 +37,9 @@ import { AgentSocketHandler } from "./agent-socket-handler";
 import { AgentSocket } from "../common/agent-socket";
 import { ManageAgentSocketHandler } from "./socket-handlers/manage-agent-socket-handler";
 import { Terminal } from "./terminal";
+import { ImageTransfers } from "./image-transfers";
+import { ImageRouter } from "./routers/image-router";
+import { ImageSocketHandler, ImageAgentSocketHandler } from "./socket-handlers/image-socket-handler";
 
 export class DockgeServer {
     app : Express;
@@ -45,12 +48,14 @@ export class DockgeServer {
     io : socketIO.Server;
     config : Config;
     indexHTML : string = "";
+    imageTransfers = new ImageTransfers();
 
     /**
      * List of express routers
      */
     routerList : Router[] = [
         new MainRouter(),
+        new ImageRouter(),
     ];
 
     /**
@@ -59,6 +64,7 @@ export class DockgeServer {
     socketHandlerList : SocketHandler[] = [
         new MainSocketHandler(),
         new ManageAgentSocketHandler(),
+        new ImageSocketHandler(),
     ];
 
     agentProxySocketHandler = new AgentProxySocketHandler();
@@ -69,6 +75,7 @@ export class DockgeServer {
     agentSocketHandlerList : AgentSocketHandler[] = [
         new DockerSocketHandler(),
         new TerminalSocketHandler(),
+        new ImageAgentSocketHandler(),
     ];
 
     /**
@@ -438,6 +445,7 @@ export class DockgeServer {
             version: versionProperty,
             latestVersion: latestVersionProperty,
             isContainer,
+            imageManagement: true,
             primaryHostname: await Settings.get("primaryHostname"),
             showOnlyManagedStacks: (await Settings.get("showOnlyManagedStacks")) === true,
             showComposeOnlyInEditMode: (await Settings.get("showComposeOnlyInEditMode")) === true,

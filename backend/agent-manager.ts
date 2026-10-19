@@ -6,6 +6,7 @@ import { isDev, LooseObject, sleep } from "../common/util-common";
 import semver from "semver";
 import { R } from "redbean-node";
 import dayjs, { Dayjs } from "dayjs";
+import type { ImageResult } from "../common/images";
 
 /**
  * Dockge Instance Manager
@@ -16,6 +17,7 @@ export class AgentManager {
     protected socket : DockgeSocket;
     protected agentSocketList : Record<string, SocketClient> = {};
     protected agentLoggedInList : Record<string, boolean> = {};
+    protected imageAgents: Record<string, { url: string; supported: boolean }> = {};
     protected _firstConnectTime : Dayjs = dayjs();
 
     constructor(socket: DockgeSocket) {
@@ -198,6 +200,10 @@ export class AgentManager {
 
         client.on("info", (res) => {
             log.debug("agent-manager", res);
+            this.imageAgents[endpoint] = { url,
+                supported: res.imageManagement === true };
+            this.socket.emit("agentCapabilities", { endpoint,
+                imageManagement: res.imageManagement === true });
 
             // Disconnect if the version is lower than 1.4.0
             if (!isDev && semver.satisfies(res.version, "< 1.4.0")) {
@@ -216,6 +222,54 @@ export class AgentManager {
     disconnect(endpoint : string) {
         let client = this.agentSocketList[endpoint];
         client?.disconnect();
+    }
+
+    getImageAgent(endpoint: string): { url: string; supported: boolean } {
+        const agent = this.imageAgents[endpoint];
+        if (!agent || !this.agentSocketList[endpoint]?.connected || !this.agentLoggedInList[endpoint]) {
+            throw new Error("Selected agent is offline");
+        }
+        if (!agent.supported) {
+            throw new Error("Update this agent to use image management");
+        }
+        return agent;
+    }
+
+    async imageCommand(endpoint: string, request: unknown, signal?: AbortSignal): Promise<ImageResult> {
+        this.getImageAgent(endpoint);
+        const client = this.agentSocketList[endpoint];
+        return new Promise((resolve, reject) => {
+            const aborted = () => finish(new Error("Image operation cancelled"));
+            const disconnected = () => finish(new Error("Agent disconnected during image operation"));
+            const timer = setTimeout(() => finish(new Error("Agent image request timed out")), 30000);
+            // Registry pulls can take much longer than a metadata request.
+            if ((request as { action: string }).action === "pull") {
+                clearTimeout(timer);
+            }
+            const finish = (error?: Error, result?: ImageResult) => {
+                clearTimeout(timer);
+                signal?.removeEventListener("abort", aborted);
+                client.off("disconnect", disconnected);
+                if (error) {
+                    reject(error);
+                } else {
+                    resolve(result || {});
+                }
+            };
+            if (signal?.aborted) {
+                finish(new Error("Image operation cancelled"));
+                return;
+            }
+            signal?.addEventListener("abort", aborted, { once: true });
+            client.once("disconnect", disconnected);
+            client.emit("agent", endpoint, "imageCommand", request, (result: { ok: boolean; msg?: string }) => {
+                if (!result?.ok) {
+                    finish(new Error(result?.msg || "Agent image request failed"));
+                } else {
+                    finish(undefined, result);
+                }
+            });
+        });
     }
 
     async connectAll() {
