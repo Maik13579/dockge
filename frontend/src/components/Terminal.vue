@@ -107,6 +107,11 @@ export default {
             cursorBlink,
             cols: this.cols,
             rows: this.rows,
+            theme: this.mode === "containerLogs" ? {
+                selectionBackground: "#ffeb3b",
+                selectionInactiveBackground: "#ffeb3b",
+                selectionForeground: "#111111",
+            } : undefined,
         });
 
         if (this.mode === "mainTerminal") {
