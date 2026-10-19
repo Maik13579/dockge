@@ -126,6 +126,9 @@ export default {
                 if (this.settings.showComposeOnlyInEditMode === undefined) {
                     this.settings.showComposeOnlyInEditMode = false;
                 }
+                if (this.settings.showAgentFriendlyNames === undefined) {
+                    this.settings.showAgentFriendlyNames = true;
+                }
                 if (this.settings.checkUpdate === undefined) {
                     this.settings.checkUpdate = true;
                 }

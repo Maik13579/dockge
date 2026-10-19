@@ -74,6 +74,7 @@ export default {
             terminalInputBuffer: "",
             cursorPosition: 0,
             searchSelecting: false,
+            terminalResizeObserver: null,
         };
     },
     computed: {
@@ -166,6 +167,7 @@ export default {
 
     unmounted() {
         window.removeEventListener("resize", this.onResizeEvent); // Remove the resize event listener from the window object.
+        this.terminalResizeObserver?.disconnect();
         if (this.mode === "containerLogs") {
             this.$root.emitAgent(this.endpoint, "leaveContainerLogs", this.stackName, this.serviceName, () => {});
         }
@@ -312,13 +314,22 @@ export default {
          * Update the terminal size to fit the container size.
          *
          * If the terminalFitAddOn is not created, creates it, loads it and then fits the terminal to the appropriate size.
-         * It then addes an event listener to the window object to listen for resize events and calls the fit method of the terminalFitAddOn.
+         * Observe container resizing as well as window resizing so sidebar changes fit the terminal.
          */
         updateTerminalSize() {
             if (!Object.hasOwn(this, "terminalFitAddOn")) {
                 this.terminalFitAddOn = new FitAddon();
                 this.terminal.loadAddon(this.terminalFitAddOn);
-                window.addEventListener("resize", this.onResizeEvent);
+                if (typeof ResizeObserver !== "undefined") {
+                    this.terminalResizeObserver = new ResizeObserver(() => {
+                        if (this.$el.clientWidth > 0 && this.$el.clientHeight > 0) {
+                            this.onResizeEvent();
+                        }
+                    });
+                    this.terminalResizeObserver.observe(this.$el);
+                } else {
+                    window.addEventListener("resize", this.onResizeEvent);
+                }
             }
             this.terminalFitAddOn.fit();
         },

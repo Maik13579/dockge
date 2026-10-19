@@ -50,9 +50,7 @@
 
                             <!-- Agent Display Name -->
                             <template v-if="$root.agentStatusList[endpoint]">
-                                <span v-if="endpoint === '' && agentItem.name === ''" class="badge bg-secondary me-2">Current</span>
-                                <span v-else-if="agentItem.name === ''" :href="agentItem.url" class="me-2">{{ endpoint }}</span>
-                                <span v-else :href="agentItem.url" class="me-2">{{ agentItem.name }}</span>
+                                <span class="me-2" :title="endpoint || $t('currentEndpoint')">{{ $root.endpointDisplayFunction(endpoint) }}</span>
                             </template>
 
                             <!-- Edit Name  -->

@@ -67,6 +67,11 @@
                 <label class="form-check-label" for="compose-only-in-edit-mode">{{ $t("Show Compose / Overrides only in edit mode") }}</label>
             </div>
 
+            <div class="form-check form-switch mb-4">
+                <input id="agent-friendly-names" v-model="settings.showAgentFriendlyNames" class="form-check-input" type="checkbox" role="switch" :disabled="!settingsLoaded" />
+                <label class="form-check-label" for="agent-friendly-names">{{ $t("Show friendly agent names instead of IP:port") }}</label>
+            </div>
+
             <!-- Save Button -->
             <div>
                 <button class="btn btn-primary" type="submit">

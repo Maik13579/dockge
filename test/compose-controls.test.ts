@@ -12,19 +12,24 @@ import { searchTerminal } from "../frontend/src/terminal-search.js";
 import * as containerStatus from "../frontend/src/container-status.js";
 
 /** Execute the actual component script with browser/transport dependencies stubbed. */
-function component(file: string, modules = {}, storage = {}) {
+function component(file: string, modules = {}, storage = {}, browser = {}) {
     const source = readFileSync(new URL(file, import.meta.url), "utf8");
     const descriptor = file.endsWith(".vue") ? parse(source).descriptor : null;
     const script = descriptor?.script?.content || source;
     const timers = new Map();
     let now = 0;
     let nextTimer = 0;
+    const browserWindow = { innerWidth: 1280,
+        addEventListener() {},
+        removeEventListener() {},
+        ...browser };
     const context = vm.createContext({
         exports: {},
         console,
         process: { env: {} },
         localStorage: storage,
-        window: { removeEventListener() {} },
+        window: browserWindow,
+        ResizeObserver: browser.ResizeObserver,
         location: { protocol: "http:",
             host: "localhost" },
         require: name => modules[name] || (name.endsWith("util-common") ? util
@@ -63,6 +68,7 @@ function component(file: string, modules = {}, storage = {}) {
     return {
         instance,
         options,
+        browser: browserWindow,
         template: descriptor?.template?.content || "",
         tick(ms) {
             now += ms;
@@ -571,7 +577,7 @@ test("the edit-only Compose setting hides both file views and expands containers
     assert.equal(JSON.stringify(page.stack), original, "Changing layout must not change either file");
 });
 
-test("general settings loads and saves the edit-only Compose toggle with a disabled default", () => {
+test("general view settings preserve edit-only files and friendly-name preferences when saved", () => {
     const { instance: page } = component("../frontend/src/pages/Settings.vue");
     let stored = {};
     page.$root.toastRes = () => {};
@@ -586,14 +592,198 @@ test("general settings loads and saves the edit-only Compose toggle with a disab
     } });
     page.loadSettings();
     assert.equal(page.settings.showComposeOnlyInEditMode, false);
+    assert.equal(page.settings.showAgentFriendlyNames, true);
     assert.equal(page.settingsLoaded, true);
     page.settings.showComposeOnlyInEditMode = true;
+    page.settings.showAgentFriendlyNames = false;
     page.saveSettings();
     assert.equal(stored.showComposeOnlyInEditMode, true);
     assert.equal(page.settings.showComposeOnlyInEditMode, true);
+    assert.equal(stored.showAgentFriendlyNames, false);
+    assert.equal(page.settings.showAgentFriendlyNames, false);
     page.settings.showComposeOnlyInEditMode = false;
+    page.settings.showAgentFriendlyNames = true;
     page.saveSettings();
     assert.equal(stored.showComposeOnlyInEditMode, false);
+    assert.equal(stored.showAgentFriendlyNames, true);
+});
+
+test("sidebar visibility and width persist while small windows clamp the display without losing preferences", () => {
+    const modules = {};
+    const storage = { stackSidebarWidth: "450",
+        stackSidebarCollapsed: "true" };
+    const { instance: page, options, browser } = component("../frontend/src/pages/Dashboard.vue", modules, storage);
+    let width = 1200;
+    const focused = [];
+    page.$refs = {
+        container: { offsetHeight: 500 },
+        dashboard: { getBoundingClientRect: () => ({ width }) },
+        hideSidebar: { focus: () => focused.push("hide") },
+        showSidebar: { focus: () => focused.push("show") },
+    };
+    options.mounted.call(page);
+    assert.equal(page.sidebarVisible, false);
+    page.toggleSidebar();
+    assert.equal(page.sidebarVisible, true);
+    assert.equal(page.sidebarDisplayWidth, 450);
+    assert.equal(storage.stackSidebarCollapsed, "false");
+    page.toggleSidebar();
+    assert.equal(page.sidebarVisible, false);
+    assert.deepEqual(focused, [ "hide", "show" ]);
+    page.toggleSidebar();
+    browser.innerWidth = 800;
+    width = 780;
+    page.measureLayout();
+    assert.equal(page.sidebarDisplayWidth, 390);
+    assert.equal(storage.stackSidebarWidth, "450");
+    browser.innerWidth = 500;
+    page.measureLayout();
+    assert.equal(page.sidebarAvailable, false);
+    assert.equal(page.sidebarCollapsed, false);
+    browser.innerWidth = 1280;
+    width = 1200;
+    page.measureLayout();
+    assert.equal(page.sidebarVisible, true);
+    assert.equal(page.sidebarDisplayWidth, 450);
+    const reloaded = component("../frontend/src/pages/Dashboard.vue", modules, storage).instance;
+    assert.equal(reloaded.sidebarWidth, 450);
+    assert.equal(reloaded.sidebarCollapsed, false);
+    for (const value of [ "invalid", "Infinity", "-1" ]) {
+        const invalidStorage = { stackSidebarWidth: value };
+        const invalid = component("../frontend/src/pages/Dashboard.vue", modules, invalidStorage).instance;
+        assert.equal(invalid.sidebarWidth, 280);
+    }
+});
+
+test("sidebar dragging respects limits and pointer ownership, and cleans up on release or leaving", () => {
+    const listeners = new Map();
+    const storage = {};
+    const modules = {};
+    const browser = {
+        addEventListener: (event, callback) => listeners.set(event, callback),
+        removeEventListener: event => listeners.delete(event),
+    };
+    const { instance: page, options } = component("../frontend/src/pages/Dashboard.vue", modules, storage, browser);
+    let captured;
+    const handle = { setPointerCapture: id => captured = id,
+        hasPointerCapture: id => captured === id,
+        releasePointerCapture: () => captured = undefined };
+    const event = { button: 0,
+        clientX: 300,
+        pointerId: 7,
+        currentTarget: handle,
+        preventDefault() {} };
+    page.startSidebarResize({ ...event,
+        button: 2 });
+    assert.equal(page.resizingSidebar, false);
+    page.startSidebarResize(event);
+    assert.equal(captured, 7);
+    assert.equal(listeners.size, 4);
+    page.resizeSidebar({ pointerId: 8,
+        clientX: 1000 });
+    assert.equal(page.sidebarWidth, 280);
+    page.resizeSidebar({ pointerId: 7,
+        clientX: 1000 });
+    assert.equal(page.sidebarWidth, 600);
+    page.resizeSidebar({ pointerId: 7,
+        clientX: -1000 });
+    assert.equal(page.sidebarWidth, 180);
+    page.resizeSidebar({ pointerId: 7,
+        clientX: 420 });
+    assert.equal(page.sidebarWidth, 400);
+    page.stopSidebarResize({ pointerId: 8 });
+    assert.equal(page.resizingSidebar, true);
+    listeners.get("pointerup")({ pointerId: 7 });
+    assert.equal(page.resizingSidebar, false);
+    assert.equal(captured, undefined);
+    assert.equal(listeners.size, 0);
+    assert.equal(storage.stackSidebarWidth, "400");
+    page.startSidebarResize(event);
+    options.beforeUnmount.call(page);
+    assert.equal(listeners.size, 0);
+    assert.equal(captured, undefined);
+    let prevented = 0;
+    page.resizeSidebarWithKeyboard({ key: "Home",
+        preventDefault: () => prevented++ });
+    assert.equal(storage.stackSidebarWidth, "180");
+    page.resizeSidebarWithKeyboard({ key: "ArrowRight",
+        preventDefault: () => prevented++ });
+    assert.equal(page.sidebarWidth, 196);
+    page.resizeSidebarWithKeyboard({ key: "End",
+        preventDefault: () => prevented++ });
+    assert.equal(page.sidebarWidth, 600);
+    assert.equal(prevented, 3);
+});
+
+test("terminals refit after sidebar container resizing and disconnect their observer when closed", () => {
+    let resize;
+    let observed;
+    let disconnected = false;
+    let fits = 0;
+    class Observer {
+        constructor(callback) {
+            resize = callback;
+        }
+
+        observe(element) {
+            observed = element;
+        }
+
+        disconnect() {
+            disconnected = true;
+        }
+    }
+    class Fit {
+        fit() {
+            fits++;
+        }
+    }
+    const modules = { "@xterm/addon-fit": { FitAddon: Fit } };
+    const storage = {};
+    const browser = { ResizeObserver: Observer };
+    const { instance: terminal, options } = component("../frontend/src/components/Terminal.vue", modules, storage, browser);
+    const events = [];
+    terminal.mode = "displayOnly";
+    terminal.name = "compose-demo";
+    terminal.terminal = { rows: 20,
+        cols: 100,
+        loadAddon() {},
+        dispose() {} };
+    terminal.$el = { clientWidth: 700,
+        clientHeight: 300 };
+    terminal.$root.emitAgent = (...args) => events.push(args);
+    terminal.$root.unbindTerminal = () => {};
+    terminal.updateTerminalSize();
+    assert.equal(observed, terminal.$el);
+    assert.equal(fits, 1);
+    terminal.$el.clientWidth = 0;
+    resize();
+    assert.equal(fits, 1, "Hidden progress terminals must not be fitted");
+    terminal.$el.clientWidth = 900;
+    resize();
+    assert.equal(fits, 2);
+    assert.deepEqual(events[0], [ "", "terminalResize", "compose-demo", 20, 100 ]);
+    options.unmounted.call(terminal);
+    assert.equal(disconnected, true);
+});
+
+test("agent labels use friendly names by default, fall back to endpoints and honor the address preference", () => {
+    const { instance: root } = component("../frontend/src/mixins/socket.ts");
+    root.agentList = {
+        "10.0.0.1:5001": { name: " Jetson " },
+        "10.0.0.2:5001": { name: "" },
+        "10.0.0.3:5001": { name: "   " },
+    };
+    assert.equal(root.endpointDisplayFunction("10.0.0.1:5001"), "Jetson");
+    assert.equal(root.endpointDisplayFunction("10.0.0.2:5001"), "10.0.0.2:5001");
+    assert.equal(root.endpointDisplayFunction("10.0.0.3:5001"), "10.0.0.3:5001");
+    assert.equal(root.endpointDisplayFunction("not-yet-loaded:5001"), "not-yet-loaded:5001");
+    assert.equal(root.endpointDisplayFunction("current"), root.$t("currentEndpoint"));
+    assert.equal(root.endpointDisplayFunction(""), root.$t("currentEndpoint"));
+    root.info.showAgentFriendlyNames = false;
+    assert.equal(root.endpointDisplayFunction("10.0.0.1:5001"), "10.0.0.1:5001");
+    root.info.showAgentFriendlyNames = true;
+    assert.equal(root.endpointDisplayFunction("10.0.0.1:5001"), "Jetson");
 });
 
 test("the log header returns to the correct stack and delegates search directions and clearing", () => {

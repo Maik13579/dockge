@@ -44,6 +44,17 @@ test("client info publishes the edit-only Compose setting as a boolean with a di
     }
 });
 
+test("client info defaults to friendly agent names and preserves an explicit address preference", async (t) => {
+    let value: unknown;
+    t.mock.method(Settings, "get", async key => key === "showAgentFriendlyNames" ? value : undefined);
+    for (value of [ undefined, false, true ]) {
+        let info;
+        const socket = { emit: (event, data) => info = data };
+        await DockgeServer.prototype.sendInfo.call({} as DockgeServer, socket as never, true);
+        assert.equal(info.showAgentFriendlyNames, value !== false);
+    }
+});
+
 test("Stop runs stop and Stop & Inactive runs down regardless of the recorded status", async (t) => {
     const { server, stackDirectory } = await fixture(t);
     const execution = t.mock.method(Terminal, "exec", async () => 0);

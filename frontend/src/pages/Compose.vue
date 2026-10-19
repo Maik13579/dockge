@@ -99,7 +99,7 @@
                                 <label for="name" class="form-label">{{ $t("dockgeAgent") }}</label>
                                 <select v-model="stack.endpoint" class="form-select">
                                     <option v-for="(agent, agentEndpoint) in $root.agentList" :key="agentEndpoint" :value="agentEndpoint" :disabled="$root.agentStatusList[agentEndpoint] != 'online'">
-                                        ({{ $root.agentStatusList[agentEndpoint] }}) {{ (agent.name !== '') ? agent.name : agent.url || $t("Current") }}
+                                        ({{ $root.agentStatusList[agentEndpoint] }}) {{ $root.endpointDisplayFunction(agentEndpoint) }}
                                     </option>
                                 </select>
                             </div>

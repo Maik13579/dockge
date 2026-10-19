@@ -10,7 +10,6 @@
                     {{ $t("Select") }}
                 </button>
 
-                <div class="placeholder"></div>
                 <div class="search-wrapper">
                     <a v-if="searchText == ''" class="search-icon">
                         <font-awesome-icon icon="search" />
@@ -18,7 +17,7 @@
                     <a v-if="searchText != ''" class="search-icon" style="cursor: pointer" @click="clearSearchText">
                         <font-awesome-icon icon="times" />
                     </a>
-                    <form>
+                    <form @submit.prevent>
                         <input v-model="searchText" class="form-control search-input" autocomplete="off" />
                     </form>
                 </div>
@@ -57,14 +56,14 @@
             <div v-for="(agent, agentIndex) in agentStackList" :key="agentIndex" class="stack-list-inner">
                 <div
                     v-if="$root.agentCount > 1" class="p-2 agent-select"
+                    :title="agent.endpoint === 'current' ? $t('currentEndpoint') : agent.endpoint"
                     @click="closedAgents.set(agent.endpoint, !closedAgents.get(agent.endpoint))"
                 >
                     <span class="me-1">
                         <font-awesome-icon v-show="closedAgents.get(agent.endpoint)" icon="chevron-circle-right" />
                         <font-awesome-icon v-show="!closedAgents.get(agent.endpoint)" icon="chevron-circle-down" />
                     </span>
-                    <span v-if="agent.endpoint === 'current'">{{ $t("currentEndpoint") }}</span>
-                    <span v-else>{{ agent.endpoint }}</span>
+                    <span>{{ $root.endpointDisplayFunction(agent.endpoint) }}</span>
                 </div>
                 <StackListItem
                     v-for="(item, index) in agent.stacks"
@@ -442,6 +441,13 @@ export default {
 .search-wrapper {
     display: flex;
     align-items: center;
+    flex: 1;
+    min-width: 0;
+
+    form {
+        flex: 1;
+        min-width: 0;
+    }
 }
 
 .search-icon {
@@ -460,7 +466,8 @@ export default {
 }
 
 .search-input {
-    max-width: 15em;
+    width: 100%;
+    min-width: 0;
 }
 
 .stack-item {
@@ -497,5 +504,12 @@ export default {
     display: flex;
     align-items: center;
     user-select: none;
+
+    span:last-child {
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
+    }
 }
 </style>

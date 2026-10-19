@@ -441,6 +441,7 @@ export class DockgeServer {
             primaryHostname: await Settings.get("primaryHostname"),
             showOnlyManagedStacks: (await Settings.get("showOnlyManagedStacks")) === true,
             showComposeOnlyInEditMode: (await Settings.get("showComposeOnlyInEditMode")) === true,
+            showAgentFriendlyNames: (await Settings.get("showAgentFriendlyNames")) !== false,
             //serverTimezone: await this.getTimezone(),
             //serverTimezoneOffset: this.getTimezoneOffset(),
         });

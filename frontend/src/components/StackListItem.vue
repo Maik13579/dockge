@@ -1,7 +1,7 @@
 <template>
     <router-link :to="url" :class="{ 'dim' : !stack.isManagedByDockge }" class="item">
         <Uptime :stack="stack" :fixed-width="true" class="me-2" />
-        <div class="title">
+        <div class="title" :title="stackName">
             <span>{{ stackName }}</span>
         </div>
     </router-link>
@@ -148,6 +148,10 @@ export default {
     }
     .title {
         margin-top: -4px;
+        min-width: 0;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        white-space: nowrap;
     }
     .endpoint {
         font-size: 12px;
