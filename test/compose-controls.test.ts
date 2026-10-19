@@ -540,3 +540,54 @@ test("log history is replayed once and stale reconnect replies are ignored", () 
     handlers.get("agent")("terminalWrite", "service-logs", "after leaving");
     assert.equal(output.length, 2);
 });
+
+test("the edit-only Compose setting hides both file views and expands containers, but always shows editors when editing", () => {
+    const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
+    page.$root.info = {};
+    page.isEditMode = false;
+    page.stack = { composeYAML: "include: [shared.yaml]",
+        composeOverrideYAML: "services: {}" };
+    const original = JSON.stringify(page.stack);
+    const width = template.match(/<div :class="([^"]*showComposeFiles[^"]*)"/)[1];
+    assert.match(template, /<div v-if="showComposeFiles" class="col-lg-6">/);
+    assert.equal(page.showComposeFiles, true, "Existing behavior is the default");
+    assert.equal(vm.runInNewContext(width, page), "col-lg-6");
+    page.$root.info.showComposeOnlyInEditMode = true;
+    assert.equal(page.showComposeFiles, false);
+    assert.equal(vm.runInNewContext(width, page), "col-12");
+    page.isEditMode = true;
+    assert.equal(page.showComposeFiles, true);
+    assert.equal(vm.runInNewContext(width, page), "col-lg-6");
+    page.$route.path = "/compose";
+    assert.equal(page.isAdd, true);
+    assert.equal(page.showComposeFiles, true, "New stacks must retain their editors");
+    page.isEditMode = false;
+    page.$root.info.showComposeOnlyInEditMode = false;
+    assert.equal(page.showComposeFiles, true);
+    assert.equal(JSON.stringify(page.stack), original, "Changing layout must not change either file");
+});
+
+test("general settings loads and saves the edit-only Compose toggle with a disabled default", () => {
+    const { instance: page } = component("../frontend/src/pages/Settings.vue");
+    let stored = {};
+    page.$root.toastRes = () => {};
+    page.$root.getSocket = () => ({ emit(event, ...args) {
+        const callback = args.at(-1);
+        if (event === "getSettings") {
+            callback({ data: { ...stored } });
+        } else if (event === "setSettings") {
+            stored = { ...args[0] };
+            callback({ ok: true });
+        }
+    } });
+    page.loadSettings();
+    assert.equal(page.settings.showComposeOnlyInEditMode, false);
+    assert.equal(page.settingsLoaded, true);
+    page.settings.showComposeOnlyInEditMode = true;
+    page.saveSettings();
+    assert.equal(stored.showComposeOnlyInEditMode, true);
+    assert.equal(page.settings.showComposeOnlyInEditMode, true);
+    page.settings.showComposeOnlyInEditMode = false;
+    page.saveSettings();
+    assert.equal(stored.showComposeOnlyInEditMode, false);
+});

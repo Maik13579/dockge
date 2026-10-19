@@ -123,6 +123,9 @@ export default {
                 if (this.settings.showOnlyManagedStacks === undefined) {
                     this.settings.showOnlyManagedStacks = false;
                 }
+                if (this.settings.showComposeOnlyInEditMode === undefined) {
+                    this.settings.showComposeOnlyInEditMode = false;
+                }
                 if (this.settings.checkUpdate === undefined) {
                     this.settings.checkUpdate = true;
                 }

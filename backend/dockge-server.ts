@@ -440,6 +440,7 @@ export class DockgeServer {
             isContainer,
             primaryHostname: await Settings.get("primaryHostname"),
             showOnlyManagedStacks: (await Settings.get("showOnlyManagedStacks")) === true,
+            showComposeOnlyInEditMode: (await Settings.get("showComposeOnlyInEditMode")) === true,
             //serverTimezone: await this.getTimezone(),
             //serverTimezoneOffset: this.getTimezoneOffset(),
         });

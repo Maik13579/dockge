@@ -82,7 +82,7 @@
             </transition>
 
             <div v-if="stack.isManagedByDockge" class="row">
-                <div class="col-lg-6">
+                <div :class="showComposeFiles ? 'col-lg-6' : 'col-12'">
                     <!-- General -->
                     <div v-if="isAdd">
                         <h4 class="mb-3">{{ $t("general") }}</h4>
@@ -108,6 +108,8 @@
 
                     <!-- Containers -->
                     <h4 class="mb-3">{{ $tc("container", 2) }}</h4>
+                    <div v-if="!showComposeFiles && resolvingConfig" class="mb-3 text-secondary" role="status">{{ $t("Resolving Compose configuration...") }}</div>
+                    <div v-if="!showComposeFiles && configError" class="mb-3 text-warning" role="alert">{{ $t("Compose configuration could not be resolved") }}: {{ configError }}</div>
                     <div v-if="serviceStatusError" class="text-warning mb-3" role="status">
                         {{ $t("Unable to refresh container status") }}: {{ serviceStatusError }}
                     </div>
@@ -173,7 +175,7 @@
                         ></Terminal>
                     </div>
                 </div>
-                <div class="col-lg-6">
+                <div v-if="showComposeFiles" class="col-lg-6">
                     <div class="btn-group mb-3" role="group" :aria-label="$t('Compose file')">
                         <button type="button" class="btn btn-normal" :class="{ active: activeDocument === 'compose' }" :aria-pressed="activeDocument === 'compose'" :title="stack.composeFileName || 'compose.yaml'" @click="activeDocument = 'compose'">{{ $t("compose") }}</button>
                         <button type="button" class="btn btn-normal" :class="{ active: activeDocument === 'overrides' }" :aria-pressed="activeDocument === 'overrides'" :title="stack.composeOverrideFileName || 'compose.override.yaml'" @click="activeDocument = 'overrides'">{{ $t("Overrides") }}</button>
@@ -458,6 +460,10 @@ export default {
 
         isAdd() {
             return this.$route.path === "/compose" && !this.submitted;
+        },
+
+        showComposeFiles() {
+            return this.isEditMode || !this.$root.info?.showComposeOnlyInEditMode;
         },
 
         /**

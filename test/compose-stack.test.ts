@@ -11,6 +11,7 @@ import { DockgeSocket } from "../backend/util-server";
 import { DockerSocketHandler } from "../backend/agent-socket-handlers/docker-socket-handler";
 import { AgentSocket } from "../common/agent-socket";
 import { CREATED_FILE, CREATED_STACK, EXITED, RUNNING, UNKNOWN } from "../common/util-common";
+import { Settings } from "../backend/settings";
 
 /** Build a saved include-based stack without starting Docker or a terminal. */
 async function fixture(t: TestContext) {
@@ -28,6 +29,20 @@ async function fixture(t: TestContext) {
         stackDirectory,
     };
 }
+
+test("client info publishes the edit-only Compose setting as a boolean with a disabled default", async (t) => {
+    let value: unknown;
+    t.mock.method(Settings, "get", async key => key === "showComposeOnlyInEditMode" ? value : undefined);
+    for (value of [ undefined, false, true, "true" ]) {
+        let info;
+        const socket = { emit: (event, data) => {
+            assert.equal(event, "info");
+            info = data;
+        } };
+        await DockgeServer.prototype.sendInfo.call({} as DockgeServer, socket as never, true);
+        assert.equal(info.showComposeOnlyInEditMode, value === true);
+    }
+});
 
 test("Stop runs stop and Stop & Inactive runs down regardless of the recorded status", async (t) => {
     const { server, stackDirectory } = await fixture(t);

@@ -62,6 +62,11 @@
                 <label class="form-check-label" for="show-only-managed-stacks">{{ $t("Show only Dockge-managed stacks") }}</label>
             </div>
 
+            <div class="form-check form-switch mb-4">
+                <input id="compose-only-in-edit-mode" v-model="settings.showComposeOnlyInEditMode" class="form-check-input" type="checkbox" role="switch" :disabled="!settingsLoaded" />
+                <label class="form-check-label" for="compose-only-in-edit-mode">{{ $t("Show Compose / Overrides only in edit mode") }}</label>
+            </div>
+
             <!-- Save Button -->
             <div>
                 <button class="btn btn-primary" type="submit">
