@@ -20,7 +20,7 @@
             </div>
             <div class="col-7">
                 <div class="function">
-                    <div class="btn-group me-2" role="group">
+                    <div class="service-actions" role="group">
                         <router-link v-if="!isEditMode && isRunning" class="btn btn-normal" :to="terminalRouteLink" disabled="">
                             <font-awesome-icon icon="terminal" />
                             Bash
@@ -34,6 +34,10 @@
                             <font-awesome-icon icon="play" class="me-1" />
                             {{ $t("startStack") }}
                         </button>
+                        <router-link v-if="!isEditMode" class="btn btn-normal" :to="logsRouteLink" target="_blank" rel="noopener">
+                            <font-awesome-icon icon="stream" class="me-1" />
+                            {{ $t("Logs") }}
+                        </router-link>
                         <button
                             v-if="!isEditMode && isRunning"
                             class="btn btn-normal"
@@ -292,6 +296,17 @@ export default defineComponent({
             }
         },
 
+        logsRouteLink() {
+            return {
+                name: this.endpoint ? "containerLogsEndpoint" : "containerLogs",
+                params: {
+                    stackName: this.stackName,
+                    serviceName: this.name,
+                    ...(this.endpoint ? { endpoint: this.endpoint } : {}),
+                },
+            };
+        },
+
         endpoint() {
             return this.$parent.$parent.endpoint;
         },
@@ -448,6 +463,18 @@ export default defineComponent({
         width: 100%;
         align-items: center;
         justify-content: end;
+    }
+
+    .service-actions {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        gap: 0.5rem;
+
+        .btn {
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+            white-space: nowrap;
+        }
     }
 
     .stats {

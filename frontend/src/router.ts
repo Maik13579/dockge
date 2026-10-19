@@ -7,6 +7,7 @@ import DashboardHome from "./pages/DashboardHome.vue";
 import Console from "./pages/Console.vue";
 import Compose from "./pages/Compose.vue";
 import ContainerTerminal from "./pages/ContainerTerminal.vue";
+import ContainerLogs from "./pages/ContainerLogs.vue";
 
 const Settings = () => import("./pages/Settings.vue");
 
@@ -22,6 +23,18 @@ const routes = [
         path: "/empty",
         component: Layout,
         children: [
+            {
+                path: "/logs/:stackName/:serviceName",
+                name: "containerLogs",
+                component: ContainerLogs,
+                meta: { fullscreenLogs: true },
+            },
+            {
+                path: "/logs/:stackName/:serviceName/:endpoint",
+                name: "containerLogsEndpoint",
+                component: ContainerLogs,
+                meta: { fullscreenLogs: true },
+            },
             {
                 path: "",
                 component: Dashboard,

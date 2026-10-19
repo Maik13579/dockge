@@ -8,6 +8,7 @@ import { AgentSocket } from "../../../common/agent-socket";
 let socket : Socket;
 
 let terminalMap : Map<string, Terminal> = new Map();
+let terminalBindings : Map<string, object> = new Map();
 
 export default defineComponent({
     data() {
@@ -17,6 +18,7 @@ export default defineComponent({
                 firstConnect: true,
                 connected: false,
                 connectCount: 0,
+                authenticatedConnectCount: 0,
                 initedSocketIO: false,
                 connectionErrorMsg: `${this.$t("Cannot connect to the socket server.")} ${this.$t("Reconnecting...")}`,
                 showReverseProxyGuide: true,
@@ -397,15 +399,17 @@ export default defineComponent({
         },
 
         afterLogin() {
-
+            this.socketIO.authenticatedConnectCount++;
         },
 
-        bindTerminal(endpoint : string, terminalName : string, terminal : Terminal) {
+        bindTerminal(endpoint : string, terminalName : string, terminal : Terminal, joinEvent = "terminalJoin", joinArgs : unknown[] = [ terminalName ]) {
             // Accept live output immediately, including before the join reply.
             terminalMap.set(terminalName, terminal);
+            const binding = {};
+            terminalBindings.set(terminalName, binding);
             // Load terminal, get terminal screen
-            this.emitAgent(endpoint, "terminalJoin", terminalName, (res) => {
-                if (terminalMap.get(terminalName) !== terminal) {
+            this.emitAgent(endpoint, joinEvent, ...joinArgs, (res) => {
+                if (terminalBindings.get(terminalName) !== binding) {
                     return;
                 }
                 if (res.ok) {
@@ -418,6 +422,7 @@ export default defineComponent({
 
         unbindTerminal(terminalName : string) {
             terminalMap.delete(terminalName);
+            terminalBindings.delete(terminalName);
         },
 
     }

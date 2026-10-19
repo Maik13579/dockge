@@ -5,6 +5,8 @@ import { TerminalSocketHandler } from "../backend/agent-socket-handlers/terminal
 import { AgentSocket } from "../common/agent-socket";
 import { DockgeServer } from "../backend/dockge-server";
 import { DockgeSocket } from "../backend/util-server";
+import { Stack } from "../backend/stack";
+import { getCombinedTerminalName, getContainerLogsTerminalName } from "../common/util-common";
 
 // Keep the real command scheduling, listeners and socket handlers. Only replace
 // the OS process with a controllable terminal, without Docker or native PTYs.
@@ -210,4 +212,75 @@ test("reopening the shared progress display subscribes to every service command"
     } finally {
         terminals.forEach(terminal => terminal.finish());
     }
+});
+
+test("service logs replay before live output and stay isolated across viewers, services, and combined logs", async (t) => {
+    const server = { stacksDir: "/unused-log-test-stacks" } as DockgeServer;
+    const stack = new Stack(server, "demo", undefined, undefined, true);
+    t.mock.method(Stack, "getStack", async () => stack);
+    const started = new Set<Terminal>();
+    t.mock.method(Terminal.prototype, "start", function (this: Terminal) {
+        if (!started.has(this)) {
+            started.add(this);
+            TestTerminal.prototype.send.call(this, "first live line\r\n");
+        }
+    });
+    const combined = new TestTerminal(server, getCombinedTerminalName("", "demo"), "docker", [], "/");
+    const events: unknown[][] = [];
+    const makeViewer = (id: string, service: string, userID = 1) => {
+        const socket = { id,
+            endpoint: "",
+            userID,
+            emitAgent: (...args: unknown[]) => events.push([ id, ...args ]) } as unknown as DockgeSocket;
+        const agent = new AgentSocket();
+        new TerminalSocketHandler().create(socket, server, agent);
+        return {
+            socket,
+            agent,
+            join: () => new Promise<{ ok: boolean; buffer?: string; msg?: string }>(resolve => {
+                agent.call("containerLogs", "demo", service, res => {
+                    events.push([ id, "history", res ]);
+                    resolve(res);
+                });
+            }),
+        };
+    };
+    const first = makeViewer("first", "included");
+    const second = makeViewer("second", "included");
+    const other = makeViewer("other", "another");
+    combined.join(first.socket);
+    t.after(() => {
+        combined.finish();
+        for (const terminal of started) {
+            TestTerminal.prototype.finish.call(terminal);
+        }
+    });
+    assert.equal((await first.join()).buffer, "");
+    assert.deepEqual(events.slice(0, 2).map(event => event[1]), [ "history", "terminalWrite" ]);
+    const name = getContainerLogsTerminalName("", "demo", "included");
+    const terminal = Terminal.getTerminal(name)!;
+    assert.deepEqual(Reflect.get(terminal, "args"), [ "compose", "logs", "--follow", "--tail", "100", "--", "included" ]);
+    assert.equal(Reflect.get(terminal, "cwd"), "/unused-log-test-stacks/demo");
+    assert.equal(terminal.enableKeepAlive, true);
+    assert.equal((await second.join()).buffer, "first live line\r\n");
+    assert.equal(started.size, 1, "Reopening must reuse the stream");
+    await other.join();
+    assert.equal(started.size, 2);
+    assert.equal((await makeViewer("anonymous", "included", 0).join()).ok, false);
+    assert.equal((await makeViewer("invalid", "bad\nservice").join()).ok, false);
+    events.length = 0;
+    TestTerminal.prototype.send.call(terminal, "selected service only\r\n");
+    assert.deepEqual(events.map(event => event[0]), [ "first", "second" ]);
+    let left = false;
+    first.agent.call("leaveContainerLogs", "demo", "included", res => left = res.ok);
+    assert.equal(left, true);
+    events.length = 0;
+    TestTerminal.prototype.send.call(terminal, "second viewer remains\r\n");
+    combined.send("combined logs remain\r\n");
+    assert.deepEqual(events, [
+        [ "second", "terminalWrite", name, "second viewer remains\r\n" ],
+        [ "first", "terminalWrite", combined.name, "combined logs remain\r\n" ],
+    ]);
+    assert.notEqual(getContainerLogsTerminalName("", "demo-a", "b"), getContainerLogsTerminalName("", "demo", "a-b"));
+    assert.notEqual(getContainerLogsTerminalName("remote", "demo", "included"), name);
 });

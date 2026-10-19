@@ -4,6 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "vue/compiler-sfc";
+import { createMemoryHistory, createRouter } from "vue-router";
 import * as util from "../common/util-common";
 import { AgentSocket } from "../common/agent-socket";
 import * as editor from "../frontend/src/compose-editor.js";
@@ -21,6 +22,7 @@ function component(file: string, modules = {}) {
         console,
         process: { env: {} },
         localStorage: {},
+        window: { removeEventListener() {} },
         location: { protocol: "http:",
             host: "localhost" },
         require: name => modules[name] || (name.endsWith("util-common") ? util
@@ -45,7 +47,7 @@ function component(file: string, modules = {}) {
         $nextTick: fn => fn(),
         $t: text => text,
     });
-    for (const [ name, method ] of Object.entries(options.methods)) {
+    for (const [ name, method ] of Object.entries(options.methods || {})) {
         instance[name] = method.bind(instance);
     }
     for (const [ name, getter ] of Object.entries(options.computed || {})) {
@@ -56,6 +58,7 @@ function component(file: string, modules = {}) {
     }
     return {
         instance,
+        options,
         template: descriptor?.template?.content || "",
         tick(ms) {
             now += ms;
@@ -413,4 +416,126 @@ test("terminal output arriving before the join acknowledgement is displayed", ()
         buffer: "" });
     handlers.get("agent")("terminalWrite", "compose-test", "Started\r\n");
     assert.deepEqual(output, [ "Starting\r\n", "", "Started\r\n" ]);
+});
+
+test("container log links open a separate local or remote page and action grids have four or two buttons", () => {
+    const { instance: card, template } = component("../frontend/src/components/Container.vue");
+    const page = { endpoint: "",
+        stack: { name: "demo" } };
+    card.$parent = { $parent: page };
+    card.name = "included";
+    card.isEditMode = false;
+    assert.equal(card.logsRouteLink.name, "containerLogs");
+    assert.deepEqual({ ...card.logsRouteLink.params }, { stackName: "demo",
+        serviceName: "included" });
+    page.endpoint = "agent.example:5001";
+    assert.equal(card.logsRouteLink.name, "containerLogsEndpoint");
+    assert.equal(card.logsRouteLink.params.endpoint, page.endpoint);
+    const actions = template.match(/<div class="service-actions"[\s\S]*?<\/div>/)[0];
+    const tags = actions.match(/<(?:button|router-link)\b(?:[^">]|"[^"]*")*>/g);
+    const visible = () => tags.filter(tag => vm.runInNewContext(tag.match(/v-if="([^"]+)"/)[1], card));
+    card.serviceStatus = [{ state: "running" }];
+    assert.equal(visible().length, 4);
+    assert.match(visible()[0], /terminalRouteLink/);
+    assert.match(visible()[1], /logsRouteLink.*target="_blank".*rel="noopener"/);
+    card.serviceStatus = [{ state: "exited" }];
+    assert.equal(visible().length, 2);
+    assert.match(visible()[0], /startService/);
+    assert.match(visible()[1], /logsRouteLink/);
+    card.isEditMode = true;
+    assert.equal(visible().length, 0);
+});
+
+test("the standalone log routes bypass the dashboard and use their own read-only stream", () => {
+    const { instance: page, template } = component("../frontend/src/pages/ContainerLogs.vue");
+    page.$route.params = { stackName: "demo",
+        serviceName: "included",
+        endpoint: "agent.example:5001" };
+    assert.equal(page.terminalName, util.getContainerLogsTerminalName("agent.example:5001", "demo", "included"));
+    assert.notEqual(page.terminalName, util.getCombinedTerminalName(page.endpoint, page.stackName));
+    assert.match(template, /mode="containerLogs"/);
+    const context = vm.createContext({
+        exports: {},
+        require: name => name === "vue-router" ? { createRouter,
+            createWebHistory: createMemoryHistory } : { default: {} },
+    });
+    const source = readFileSync(new URL("../frontend/src/router.ts", import.meta.url), "utf8");
+    vm.runInContext(ts.transpileModule(source, { compilerOptions: { module: ts.ModuleKind.CommonJS } }).outputText, context);
+    const router = context.exports.router;
+    for (const endpoint of [ "", "agent.example:5001" ]) {
+        const route = router.resolve({ name: endpoint ? "containerLogsEndpoint" : "containerLogs",
+            params: { stackName: "demo",
+                serviceName: "included",
+                ...(endpoint ? { endpoint } : {}) } });
+        assert.equal(route.matched.length, 2, "Only the login layout and log page must be mounted");
+        assert.equal(route.meta.fullscreenLogs, true);
+        assert.equal(route.params.serviceName, "included");
+        assert.equal(route.params.endpoint || "", endpoint);
+    }
+});
+
+test("log subscriptions use the selected service, reconnect after login, and leave without touching combined logs", () => {
+    const { instance: terminal, options } = component("../frontend/src/components/Terminal.vue");
+    const calls = [];
+    let resets = 0;
+    let disposed = false;
+    terminal.$root.socketIO = { connected: true,
+        authenticatedConnectCount: 1 };
+    terminal.$root.agentStatusList = { "agent.example": "offline" };
+    terminal.$root.bindTerminal = (...args) => calls.push([ "bind", ...args ]);
+    terminal.$root.unbindTerminal = (...args) => calls.push([ "unbind", ...args ]);
+    terminal.$root.emitAgent = (...args) => calls.push([ "emit", ...args ]);
+    terminal.endpoint = "agent.example";
+    terminal.name = "selected-log-stream";
+    terminal.stackName = "demo";
+    terminal.serviceName = "included";
+    terminal.mode = "containerLogs";
+    terminal.terminal = { reset: () => resets++,
+        dispose: () => disposed = true };
+    terminal.bind();
+    assert.deepEqual(calls[0].slice(0, 3), [ "bind", terminal.endpoint, terminal.name ]);
+    assert.equal(calls[0][4], "containerLogs");
+    assert.deepEqual(Array.from(calls[0][5]), [ "demo", "included" ]);
+    options.watch.logConnection.call(terminal);
+    assert.equal(resets, 0, "Wait until the remote agent is online");
+    terminal.$root.agentStatusList[terminal.endpoint] = "online";
+    options.watch.logConnection.call(terminal);
+    assert.equal(resets, 1);
+    terminal.mode = "displayOnly";
+    options.watch.logConnection.call(terminal);
+    assert.equal(resets, 1, "Existing terminals must not change on reconnect");
+    terminal.mode = "containerLogs";
+    terminal.$refs.terminal = { removeEventListener() {} };
+    options.unmounted.call(terminal);
+    assert.equal(disposed, true);
+    const leave = calls.find(call => call[0] === "emit");
+    assert.deepEqual(leave.slice(1, 5), [ "agent.example", "leaveContainerLogs", "demo", "included" ]);
+    assert.deepEqual(calls.at(-1), [ "unbind", "selected-log-stream" ]);
+});
+
+test("log history is replayed once and stale reconnect replies are ignored", () => {
+    const handlers = new Map();
+    const socket = { on: (event, callback) => handlers.set(event, callback) };
+    const modules = { "socket.io-client": { io: () => socket } };
+    const { instance: root } = component("../frontend/src/mixins/socket.ts", modules);
+    root.initSocketIO();
+    root.afterLogin();
+    assert.equal(root.socketIO.authenticatedConnectCount, 1);
+    const calls = [];
+    const output = [];
+    root.emitAgent = (...args) => calls.push(args);
+    root.toastRes = () => {};
+    const terminal = { write: data => output.push(data) };
+    root.bindTerminal("", "service-logs", terminal, "containerLogs", [ "demo", "included" ]);
+    assert.deepEqual(calls[0].slice(0, 4), [ "", "containerLogs", "demo", "included" ]);
+    root.bindTerminal("", "service-logs", terminal, "containerLogs", [ "demo", "included" ]);
+    calls[0].at(-1)({ ok: true,
+        buffer: "stale history" });
+    calls[1].at(-1)({ ok: true,
+        buffer: "history\r\n" });
+    handlers.get("agent")("terminalWrite", "service-logs", "live\r\n");
+    assert.deepEqual(output, [ "history\r\n", "live\r\n" ]);
+    root.unbindTerminal("service-logs");
+    handlers.get("agent")("terminalWrite", "service-logs", "after leaving");
+    assert.equal(output.length, 2);
 });

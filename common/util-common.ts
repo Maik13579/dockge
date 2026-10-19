@@ -205,6 +205,10 @@ export function getCombinedTerminalName(endpoint : string, stack : string) {
     return "combined-" + endpoint + "-" + stack;
 }
 
+export function getContainerLogsTerminalName(endpoint : string, stack : string, service : string) {
+    return "container-logs-" + JSON.stringify([ endpoint, stack, service ]);
+}
+
 export function getContainerTerminalName(endpoint : string, container : string) {
     return "container-" + endpoint + "-" + container;
 }

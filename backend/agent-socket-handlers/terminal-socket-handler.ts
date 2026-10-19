@@ -5,6 +5,7 @@ import { InteractiveTerminal, MainTerminal, Terminal } from "../terminal";
 import { Stack } from "../stack";
 import { AgentSocketHandler } from "../agent-socket-handler";
 import { AgentSocket } from "../../common/agent-socket";
+import { getContainerLogsTerminalName } from "../../common/util-common";
 
 export class TerminalSocketHandler extends AgentSocketHandler {
     create(socket : DockgeSocket, server : DockgeServer, agentSocket : AgentSocket) {
@@ -110,6 +111,43 @@ export class TerminalSocketHandler extends AgentSocketHandler {
                 callbackResult({
                     ok: true,
                 }, callback);
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        // Read-only, service-specific logs, independent of the combined output.
+        agentSocket.on("containerLogs", async (stackName : unknown, serviceName : unknown, callback) => {
+            try {
+                checkLogin(socket);
+                if (typeof stackName !== "string" || typeof serviceName !== "string") {
+                    throw new ValidationError("Stack and service names must be strings.");
+                }
+                if (typeof callback !== "function") {
+                    return;
+                }
+                const stack = await Stack.getStack(server, stackName);
+                const terminal = stack.getContainerLogsTerminal(socket, serviceName);
+                // Send history before subscribing/starting, so live bytes cannot
+                // arrive ahead of the history or be replayed twice on reopening.
+                callbackResult({ ok: true,
+                    buffer: terminal.getBuffer() }, callback);
+                terminal.join(socket);
+                terminal.start();
+            } catch (e) {
+                callbackError(e, callback);
+            }
+        });
+
+        agentSocket.on("leaveContainerLogs", (stackName : unknown, serviceName : unknown, callback) => {
+            try {
+                checkLogin(socket);
+                if (typeof stackName !== "string" || typeof serviceName !== "string") {
+                    throw new ValidationError("Stack and service names must be strings.");
+                }
+                // Leaving must also work after the stack files have been removed.
+                Terminal.getTerminal(getContainerLogsTerminalName(socket.endpoint, stackName, serviceName))?.leave(socket);
+                callbackResult({ ok: true }, callback);
             } catch (e) {
                 callbackError(e, callback);
             }

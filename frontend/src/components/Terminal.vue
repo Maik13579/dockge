@@ -60,6 +60,7 @@ export default {
         // displayOnly: Only display terminal output
         // mainTerminal: Allow input limited commands and output
         // interactive: Free input and output
+        // containerLogs: Read-only logs for one Compose service
         mode: {
             type: String,
             default: "displayOnly",
@@ -73,13 +74,28 @@ export default {
             cursorPosition: 0,
         };
     },
+    computed: {
+        logConnection() {
+            return `${this.$root.socketIO.authenticatedConnectCount}:${this.$root.agentStatusList[this.endpoint]}`;
+        },
+    },
+    watch: {
+        logConnection() {
+            // A reconnect must wait for authentication, including remote agents.
+            if (this.mode === "containerLogs" && this.terminal && this.$root.socketIO.connected
+                && (!this.endpoint || this.$root.agentStatusList[this.endpoint] === "online")) {
+                this.terminal.reset();
+                this.bind();
+            }
+        },
+    },
     created() {
 
     },
     mounted() {
         let cursorBlink = true;
 
-        if (this.mode === "displayOnly") {
+        if (this.mode === "displayOnly" || this.mode === "containerLogs") {
             cursorBlink = false;
         }
 
@@ -143,6 +159,9 @@ export default {
 
     unmounted() {
         window.removeEventListener("resize", this.onResizeEvent); // Remove the resize event listener from the window object.
+        if (this.mode === "containerLogs") {
+            this.$root.emitAgent(this.endpoint, "leaveContainerLogs", this.stackName, this.serviceName, () => {});
+        }
         this.$root.unbindTerminal(this.name);
         this.terminal.dispose();
         this.$refs.terminal?.removeEventListener("contextmenu", this.handleContextMenu);
@@ -151,6 +170,10 @@ export default {
     methods: {
         bind(endpoint, name) {
             // Workaround: normally this.name should be set, but it is not sometimes, so we use the parameter, but eventually this.name and name must be the same name
+            if (this.mode === "containerLogs") {
+                this.$root.bindTerminal(this.endpoint, this.name, this.terminal, "containerLogs", [ this.stackName, this.serviceName ]);
+                return;
+            }
             if (name) {
                 this.$root.unbindTerminal(name);
                 this.$root.bindTerminal(endpoint, name, this.terminal);

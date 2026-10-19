@@ -10,6 +10,7 @@ import {
     COMBINED_TERMINAL_ROWS,
     CREATED_FILE,
     getCombinedTerminalName,
+    getContainerLogsTerminalName,
     getComposeTerminalName, getContainerExecTerminalName,
     PROGRESS_TERMINAL_ROWS,
     RUNNING, TERMINAL_ROWS,
@@ -554,6 +555,18 @@ export class Stack {
         terminal.cols = COMBINED_TERMINAL_COLS;
         terminal.join(socket);
         terminal.start();
+    }
+
+    getContainerLogsTerminal(socket: DockgeSocket, serviceName: string) : Terminal {
+        if (!/^[a-zA-Z0-9_.-]+$/.test(serviceName)) {
+            throw new ValidationError("Invalid service name.");
+        }
+        const terminalName = getContainerLogsTerminalName(socket.endpoint, this.name, serviceName);
+        const terminal = Terminal.getOrCreateTerminal(this.server, terminalName, "docker", this.getComposeOptions("logs", "--follow", "--tail", "100", "--", serviceName), this.path);
+        terminal.enableKeepAlive = true;
+        terminal.rows = COMBINED_TERMINAL_ROWS;
+        terminal.cols = COMBINED_TERMINAL_COLS;
+        return terminal;
     }
 
     async leaveCombinedTerminal(socket: DockgeSocket) {
