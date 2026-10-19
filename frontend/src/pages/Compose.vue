@@ -26,9 +26,9 @@
                         {{ $t("editStack") }}
                     </button>
 
-                    <button v-if="!isEditMode && (!active || hasStoppedServices)" class="btn btn-primary" :disabled="stackBusy" @click="startStack">
+                    <button v-if="!isEditMode" class="btn btn-primary" :disabled="stackBusy" @click="startStack">
                         <font-awesome-icon icon="play" class="me-1" />
-                        {{ $t("startStack") }}
+                        {{ $t("Up") }}
                     </button>
 
                     <button v-if="!isEditMode && active" class="btn btn-normal " :disabled="stackBusy" @click="restartStack">
@@ -36,9 +36,9 @@
                         {{ $t("restartStack") }}
                     </button>
 
-                    <button v-if="!isEditMode" class="btn btn-normal" :disabled="stackBusy" @click="updateStack">
+                    <button v-if="!isEditMode" class="btn btn-normal" :disabled="stackBusy" @click="pullStack">
                         <font-awesome-icon icon="cloud-arrow-down" class="me-1" />
-                        {{ $t("updateStack") }}
+                        {{ $t("Pull") }}
                     </button>
 
                     <button v-if="!isEditMode || operationRunning" class="btn btn-normal" :disabled="stopping" @click="stopStack">
@@ -47,9 +47,17 @@
                     </button>
 
                     <BDropdown right text="" variant="normal">
+                        <BDropdownItem :disabled="stopping" @click="stopStack">
+                            <font-awesome-icon icon="stop" class="me-1" />
+                            {{ $t("stopStack") }}
+                        </BDropdownItem>
                         <BDropdownItem :disabled="stopping" @click="downStack">
                             <font-awesome-icon icon="stop" class="me-1" />
-                            {{ $t("downStack") }}
+                            {{ $t("Down") }}
+                        </BDropdownItem>
+                        <BDropdownItem :disabled="stopping" @click="killStack">
+                            <font-awesome-icon icon="times-circle" class="me-1" />
+                            {{ $t("Kill") }}
                         </BDropdownItem>
                     </BDropdown>
                 </div>
@@ -146,6 +154,8 @@
                             :dockerStats="dockerStats"
                             @start-service="startService"
                             @stop-service="stopService"
+                            @kill-service="killService"
+                            @pull-service="pullService"
                             @restart-service="restartService"
                             @update-service="updateService"
                             @remove-service="removeService"
@@ -503,11 +513,6 @@ export default {
             return this.status === RUNNING;
         },
 
-        hasStoppedServices() {
-            return Object.values(this.serviceStatusList).some(instances => instances.some(instance =>
-                [ "created", "exited", "dead" ].includes(instance.state || instance.status)));
-        },
-
         terminalName() {
             if (!this.stack.name) {
                 return "";
@@ -837,8 +842,12 @@ export default {
             this.runStackOperation("restartStack");
         },
 
-        updateStack() {
-            this.runStackOperation("updateStack");
+        pullStack() {
+            this.runStackOperation("pullStack");
+        },
+
+        killStack() {
+            this.runStackOperation("killStack");
         },
 
         beginOperation(stopping) {
@@ -873,7 +882,7 @@ export default {
             if (this.stopping) {
                 return;
             }
-            const request = this.beginOperation(event === "stopStack" || event === "downStack");
+            const request = this.beginOperation([ "stopStack", "downStack", "killStack" ].includes(event));
             this.$root.emitAgent(this.endpoint, event, this.stack.name, (res) => {
                 this.finishOperation(request, res);
             });
@@ -1061,6 +1070,14 @@ export default {
 
         stopService(serviceName) {
             this.runServiceOperation("stopService", serviceName);
+        },
+
+        killService(serviceName) {
+            this.runServiceOperation("killService", serviceName);
+        },
+
+        pullService(serviceName) {
+            this.runServiceOperation("pullService", serviceName);
         },
 
         restartService(serviceName) {

@@ -115,6 +115,55 @@ test("Stop remains enabled during Start and late Start replies cannot unlock a p
     assert.equal(page.stopping, false);
 });
 
+test("Pull uses its own event and Stop, Down and Kill stay available to interrupt Up", () => {
+    const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    const calls = [];
+    page.$root.emitAgent = (...args) => calls.push(args);
+    page.$root.toastRes = () => {};
+    page.requestServiceStatus = () => {};
+    page.pullStack();
+    assert.equal(calls[0][1], "pullStack");
+    calls[0].at(-1)({ ok: true });
+    const menu = template.match(/<BDropdown\b[\s\S]*?<\/BDropdown>/)[0];
+    for (const action of [ "stopStack", "downStack", "killStack" ]) {
+        const item = menu.match(new RegExp(`<BDropdownItem[^>]*@click="${action}"[^>]*>`))[0];
+        page.startStack();
+        assert.equal(vm.runInNewContext(item.match(/:disabled="([^"]+)"/)[1], page), false);
+        const start = calls.at(-1);
+        page[action]();
+        const shutdown = calls.at(-1);
+        assert.equal(shutdown[1], action);
+        assert.equal(page.stopping, true);
+        start.at(-1)({ ok: false });
+        assert.equal(page.stopping, true);
+        shutdown.at(-1)({ ok: true });
+        assert.equal(page.stopping, false);
+    }
+});
+
+test("container Pull and Kill target their service independently of YAML field editing", () => {
+    const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
+    const { instance: card } = component("../frontend/src/components/Container.vue");
+    page.stack = { name: "test" };
+    page.processing = false;
+    card.name = "included";
+    const calls = [];
+    page.$root.emitAgent = (...args) => calls.push(args);
+    page.$root.toastRes = () => {};
+    page.requestServiceStatus = () => {};
+    card.$emit = (event, name) => {
+        assert.match(template, new RegExp(`@${event}="`));
+        page[event === "pull-service" ? "pullService" : "killService"](name);
+    };
+    card.pullService();
+    assert.deepEqual(calls[0].slice(1, 4), [ "pullService", "test", "included" ]);
+    calls[0].at(-1)({ ok: true });
+    card.killService();
+    assert.deepEqual(calls[1].slice(1, 4), [ "killService", "test", "included" ]);
+    calls[1].at(-1)({ ok: true });
+});
+
 test("a service Start stays enabled while bulk startup waits and only locks its own service", () => {
     const { instance: page } = component("../frontend/src/pages/Compose.vue");
     const { instance: card, template } = component("../frontend/src/components/Container.vue");
@@ -211,7 +260,7 @@ test("Stop supersedes service operations without letting their late replies unlo
     assert.equal(page.stackBusy, false);
 });
 
-test("a partially running stack can retry Up instead of being limited to Restart", () => {
+test("Up stays available for partial startup and to apply pulled images to a running stack", () => {
     const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
     page.stack = { name: "test" };
     page.processing = false;
@@ -224,6 +273,8 @@ test("a partially running stack can retry Up instead of being limited to Restart
     const visible = button.match(/v-if="([^"]+)"/)[1];
     assert.equal(vm.runInNewContext(visible, page), true);
     page.serviceStatusList.waiting = [{ state: "running" }];
+    assert.equal(vm.runInNewContext(visible, page), true);
+    page.isEditMode = true;
     assert.equal(vm.runInNewContext(visible, page), false);
 });
 
@@ -428,7 +479,7 @@ test("terminal output arriving before the join acknowledgement is displayed", ()
     assert.deepEqual(output, [ "Starting\r\n", "", "Started\r\n" ]);
 });
 
-test("container log links navigate like Bash and action grids have four or two buttons", () => {
+test("container action grids show Stop Kill Restart / Pull Exec Logs or Up Pull Logs", () => {
     const { instance: card, template } = component("../frontend/src/components/Container.vue");
     const page = { endpoint: "",
         stack: { name: "demo" } };
@@ -445,14 +496,17 @@ test("container log links navigate like Bash and action grids have four or two b
     const tags = actions.match(/<(?:button|router-link)\b(?:[^">]|"[^"]*")*>/g);
     const visible = () => tags.filter(tag => vm.runInNewContext(tag.match(/v-if="([^"]+)"/)[1], card));
     card.serviceStatus = [{ state: "running" }];
-    assert.equal(visible().length, 4);
-    assert.match(visible()[0], /terminalRouteLink/);
-    assert.match(visible()[1], /logsRouteLink/);
-    assert.doesNotMatch(visible()[1], /target=/);
+    assert.equal(visible().length, 6);
+    for (const [ index, action ] of [ "stopService", "killService", "restartService", "pullService", "terminalRouteLink", "logsRouteLink" ].entries()) {
+        assert.ok(visible()[index].includes(action));
+    }
+    assert.match(visible()[4], /\$t\('Exec'\)/);
+    assert.doesNotMatch(visible()[5], /target=/);
     card.serviceStatus = [{ state: "exited" }];
-    assert.equal(visible().length, 2);
+    assert.equal(visible().length, 3);
     assert.match(visible()[0], /startService/);
-    assert.match(visible()[1], /logsRouteLink/);
+    assert.match(visible()[1], /pullService/);
+    assert.match(visible()[2], /logsRouteLink/);
     card.isEditMode = true;
     assert.equal(visible().length, 0);
 });
@@ -875,9 +929,9 @@ test("compact rows show only Start or Stop, and expansion restores the original 
     assert.equal(card.compactStats.MemUsage, "100MiB / 8GiB");
     card.expandedCompact = true;
     assert.equal(card.compactLayout, false);
-    assert.equal(visible().length, 4);
-    assert.match(visible()[0], /terminalRouteLink/);
-    assert.match(visible()[1], /logsRouteLink/);
+    assert.equal(visible().length, 6);
+    assert.match(visible()[0], /stopService/);
+    assert.match(visible()[1], /killService/);
     assert.match(visible()[2], /restartService/);
     card.expandedCompact = false;
     card.serviceStatus = [{ state: "exited",
@@ -885,7 +939,7 @@ test("compact rows show only Start or Stop, and expansion restores the original 
     assert.equal(visible().length, 1);
     assert.match(visible()[0], /startService/);
     card.expandedCompact = true;
-    assert.equal(visible().length, 2);
+    assert.equal(visible().length, 3);
     card.isEditMode = true;
     card.expandedCompact = false;
     assert.equal(card.compactLayout, false, "Editing must always use the original card");

@@ -228,6 +228,30 @@ export class DockerSocketHandler extends AgentSocketHandler {
             }
         });
 
+        for (const [ event, command, message ] of [
+            [ "pullStack", "pull", "Pulled" ],
+            [ "killStack", "kill", "Killed" ],
+        ] as const) {
+            agentSocket.on(event, async (stackName: unknown, callback) => {
+                try {
+                    checkLogin(socket);
+                    if (typeof stackName !== "string") {
+                        throw new ValidationError("Stack name must be a string");
+                    }
+                    const stack = await Stack.getStack(server, stackName);
+                    await stack[command](socket);
+                    callbackResult({
+                        ok: true,
+                        msg: message,
+                        msgi18n: true,
+                    }, callback);
+                    server.sendStackList();
+                } catch (e) {
+                    callbackError(e, callback);
+                }
+            });
+        }
+
         // down stack
         agentSocket.on("downStack", async (stackName : unknown, callback) => {
             try {
@@ -354,6 +378,29 @@ export class DockerSocketHandler extends AgentSocketHandler {
                 callbackError(e, callback);
             }
         });
+
+        for (const [ event, command, message ] of [
+            [ "pullService", "pullService", "pulled" ],
+            [ "killService", "killService", "killed" ],
+        ] as const) {
+            agentSocket.on(event, async (stackName: unknown, serviceName: unknown, callback) => {
+                try {
+                    checkLogin(socket);
+                    if (typeof stackName !== "string" || typeof serviceName !== "string") {
+                        throw new ValidationError("Stack name and service name must be strings");
+                    }
+                    const stack = await Stack.getStack(server, stackName);
+                    await stack[command](socket, serviceName);
+                    callbackResult({
+                        ok: true,
+                        msg: `Service ${serviceName} ${message}`,
+                    }, callback);
+                    server.sendStackList();
+                } catch (e) {
+                    callbackError(e, callback);
+                }
+            });
+        }
 
         // getExternalNetworkList
         agentSocket.on("getDockerNetworkList", async (callback) => {

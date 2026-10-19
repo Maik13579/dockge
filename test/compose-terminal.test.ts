@@ -49,7 +49,7 @@ test("Stop interrupts pending up, waits for its exit, then executes down", async
         }
     });
     const up = Terminal.exec(server, undefined, name, "docker", [ "compose", "up", "-d" ], "/");
-    const cancelled = assert.rejects(up, /cancelled by Stop/);
+    const cancelled = assert.rejects(up, /cancelled by a shutdown action/);
     const down = Terminal.exec(server, undefined, name, "docker", [ "compose", "down" ], "/", true);
     assert.equal(interrupted, true);
     assert.equal(commands.length, 1, "Down must wait until Up has stopped creating containers");
@@ -99,7 +99,7 @@ test("Stop can replace a Compose command that ignores Ctrl+C", async (t) => {
         }
     });
     const up = Terminal.exec(server, undefined, name, "docker", [ "compose", "up", "-d" ], "/");
-    const cancelled = assert.rejects(up, /cancelled by Stop/);
+    const cancelled = assert.rejects(up, /cancelled by a shutdown action/);
     assert.equal(await Terminal.exec(server, undefined, name, "docker", [ "compose", "down" ], "/", true), 0);
     await cancelled;
     assert.deepEqual(signals, [ "Ctrl+C", "SIGKILL" ]);
@@ -163,7 +163,7 @@ test("service commands run during bulk Up, retain its progress, and all stop bef
     assert.equal(Terminal.getTerminal(name), processes.get(name)?.terminal);
     await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/", false, `${name}:service:first`), /Another operation/);
     await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/"), /Another operation/);
-    const cancelled = [ up, first, second ].map(promise => assert.rejects(promise, /cancelled by Stop/));
+    const cancelled = [ up, first, second ].map(promise => assert.rejects(promise, /cancelled by a shutdown action/));
     const down = Terminal.exec(server, undefined, name, "docker", [ "compose", "down" ], "/", true);
     assert.equal(interrupted.length, 3);
     await assert.rejects(Terminal.exec(server, undefined, name, "docker", [], "/", false, `${name}:service:third`), /stack is stopping/);

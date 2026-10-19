@@ -55,12 +55,12 @@ test("client info defaults to friendly agent names and preserves an explicit add
     }
 });
 
-test("Stop runs stop and Stop & Inactive runs down regardless of the recorded status", async (t) => {
+test("Stop, Down and Kill run their matching commands regardless of the recorded status", async (t) => {
     const { server, stackDirectory } = await fixture(t);
     const execution = t.mock.method(Terminal, "exec", async () => 0);
     const stack = new Stack(server, "test");
     const socket = { endpoint: "" } as DockgeSocket;
-    for (const command of [ "stop", "down" ] as const) {
+    for (const command of [ "stop", "down", "kill" ] as const) {
         for (const status of [ UNKNOWN, CREATED_FILE, CREATED_STACK, RUNNING, EXITED ]) {
             Object.assign(stack, { _status: status });
             assert.equal(await stack[command](socket), 0);
@@ -68,9 +68,74 @@ test("Stop runs stop and Stop & Inactive runs down regardless of the recorded st
             assert.equal(args[3], "docker");
             assert.deepEqual(args[4], [ "compose", "--progress", "plain", command ]);
             assert.equal(args[5], stackDirectory);
-            assert.equal(args[6], true, "Both shutdown actions must interrupt a pending Compose operation");
+            assert.equal(args[6], true, "Shutdown actions must interrupt a pending Compose operation");
         }
     }
+});
+
+test("Pull only downloads images even when the stack is running and propagates failures", async (t) => {
+    const { server, stackDirectory } = await fixture(t);
+    const stack = new Stack(server, "test");
+    const socket = { endpoint: "" } as DockgeSocket;
+    let exitCode = 0;
+    const execution = t.mock.method(Terminal, "exec", async () => exitCode);
+    t.mock.method(stack, "updateStatus", async () => {
+        assert.fail("Pull must not query status to restart containers");
+    });
+    for (const status of [ CREATED_FILE, RUNNING, EXITED ]) {
+        Object.assign(stack, { _status: status });
+        const before = execution.mock.calls.length;
+        assert.equal(await stack.pull(socket), 0);
+        assert.equal(execution.mock.calls.length, before + 1);
+        const args = execution.mock.calls.at(-1)!.arguments;
+        assert.deepEqual(args[4], [ "compose", "--progress", "plain", "pull" ]);
+        assert.equal(args[5], stackDirectory);
+        assert.notEqual(args[6], true);
+    }
+    exitCode = 1;
+    await assert.rejects(stack.pull(socket), /Failed to pull/);
+});
+
+test("Pull and Kill socket actions validate input and execute stack or named-service commands", async (t) => {
+    const { server, stackDirectory } = await fixture(t);
+    let refreshed = 0;
+    Object.assign(server, { sendStackList: () => refreshed++ });
+    const socket = { userID: 1,
+        endpoint: "" } as DockgeSocket;
+    const agent = new AgentSocket();
+    new DockerSocketHandler().create(socket, server, agent);
+    let exitCode = 0;
+    const execution = t.mock.method(Terminal, "exec", async () => exitCode);
+    for (const command of [ "pull", "kill" ] as const) {
+        for (const service of [ false, true ]) {
+            const event = command + (service ? "Service" : "Stack");
+            const handler = agent.eventList.get(event)!;
+            const input = service ? [ "test", "included" ] : [ "test" ];
+            const invoke = async (args: unknown[]) => {
+                let reply;
+                await handler(...args, res => reply = res);
+                return reply;
+            };
+            const before = execution.mock.calls.length;
+            socket.userID = 0;
+            assert.equal((await invoke(input)).ok, false);
+            socket.userID = 1;
+            assert.equal((await invoke(service ? [ "test", 42 ] : [ 42 ])).ok, false);
+            assert.equal(execution.mock.calls.length, before, "Invalid requests must never execute Docker");
+            assert.equal((await invoke(input)).ok, true);
+            const args = execution.mock.calls.at(-1)!.arguments;
+            assert.deepEqual(args[4], [ "compose", "--progress", "plain", command, ...(service ? [ "included" ] : []) ]);
+            assert.equal(args[5], stackDirectory);
+            assert.equal(args[6] === true, command === "kill" && !service);
+            if (service) {
+                assert.match(args[7] as string, /:service:included$/);
+            }
+            exitCode = 1;
+            assert.equal((await invoke(input)).ok, false, "Command failures must reach the caller");
+            exitCode = 0;
+        }
+    }
+    assert.equal(refreshed, 4, "Each successful action refreshes stack status");
 });
 
 test("a custom Compose project name updates its managed folder instead of creating a duplicate", async (t) => {
@@ -158,7 +223,7 @@ test("service polling retains exit codes so failed containers can sort above cle
     assert.equal(Reflect.get(services.get("finished")![0], "exitCode"), 0);
 });
 
-for (const command of [ "stop", "down" ] as const) {
+for (const command of [ "stop", "down", "kill" ] as const) {
     test(`${command} cancels Update between Pull and Up even without a running terminal`, async (t) => {
         const { server } = await fixture(t);
         const stack = new Stack(server, "test");
@@ -178,7 +243,7 @@ for (const command of [ "stop", "down" ] as const) {
             Object.assign(stack, { _status: RUNNING });
         });
         const update = stack.update(socket);
-        const cancelled = assert.rejects(update, /cancelled by Stop/);
+        const cancelled = assert.rejects(update, /cancelled by a shutdown action/);
         await queryingStatus;
         await stack[command](socket);
         releaseStatus!();
@@ -306,7 +371,7 @@ test("multi-service startup exposes states and logs while Up waits, and Stop can
     });
     await up;
     assert.equal(startReply.ok, false);
-    assert.match(startReply.msg, /cancelled by Stop/);
+    assert.match(startReply.msg, /cancelled by a shutdown action/);
     assert.equal(stopReply.ok, true);
     assert.deepEqual(commands.at(-1), [ "compose", "--progress", "plain", "stop" ]);
 });

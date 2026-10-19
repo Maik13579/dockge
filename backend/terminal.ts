@@ -293,7 +293,7 @@ export class Terminal {
 
                 terminal.onExit((exitCode : number) => {
                     if (terminal.interrupted) {
-                        reject(new Error("Compose operation cancelled by Stop."));
+                        reject(new Error("Compose operation cancelled by a shutdown action."));
                     } else {
                         resolve(exitCode);
                     }

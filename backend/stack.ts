@@ -455,7 +455,7 @@ export class Stack {
     getComposeOptions(command : string, ...extraOptions : string[]) {
         //--env-file ./../global.env --env-file .env
         let options = [ "compose" ];
-        if ([ "up", "down", "stop", "restart", "pull" ].includes(command)) {
+        if ([ "up", "down", "stop", "kill", "restart", "pull" ].includes(command)) {
             // The compact TTY renderer hides containers behind "... N more"
             // in the embedded progress terminal. Keep every progress line.
             options.push("--progress", "plain");
@@ -510,6 +510,25 @@ export class Stack {
         return exitCode;
     }
 
+    async kill(socket: DockgeSocket) : Promise<number> {
+        const terminalName = getComposeTerminalName(socket.endpoint, this.name);
+        Stack.pendingUpdates.delete(terminalName);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("kill"), this.path, true);
+        if (exitCode !== 0) {
+            throw new Error("Failed to kill, please check the terminal output for more information.");
+        }
+        return exitCode;
+    }
+
+    async pull(socket: DockgeSocket) : Promise<number> {
+        const terminalName = getComposeTerminalName(socket.endpoint, this.name);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("pull"), this.path);
+        if (exitCode !== 0) {
+            throw new Error("Failed to pull, please check the terminal output for more information.");
+        }
+        return exitCode;
+    }
+
     async update(socket: DockgeSocket) {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
         if (Stack.pendingUpdates.has(terminalName)) {
@@ -527,7 +546,7 @@ export class Stack {
             // terminal process for Terminal.exec to interrupt.
             await this.updateStatus();
             if (Stack.pendingUpdates.get(terminalName) !== operation) {
-                throw new Error("Compose operation cancelled by Stop.");
+                throw new Error("Compose operation cancelled by a shutdown action.");
             }
             log.debug("update", "Status: " + this.status);
             // If the stack is not running, we don't need to restart it
@@ -672,6 +691,24 @@ export class Stack {
             throw new Error(`Failed to restart service ${serviceName}, please check logs for more information.`);
         }
 
+        return exitCode;
+    }
+
+    async killService(socket: DockgeSocket, serviceName: string): Promise<number> {
+        const terminalName = getComposeTerminalName(socket.endpoint, this.name);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("kill", serviceName), this.path, false, `${terminalName}:service:${serviceName}`);
+        if (exitCode !== 0) {
+            throw new Error(`Failed to kill service ${serviceName}, please check logs for more information.`);
+        }
+        return exitCode;
+    }
+
+    async pullService(socket: DockgeSocket, serviceName: string): Promise<number> {
+        const terminalName = getComposeTerminalName(socket.endpoint, this.name);
+        const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("pull", serviceName), this.path, false, `${terminalName}:service:${serviceName}`);
+        if (exitCode !== 0) {
+            throw new Error(`Failed to pull service ${serviceName}, please check logs for more information.`);
+        }
         return exitCode;
     }
 }

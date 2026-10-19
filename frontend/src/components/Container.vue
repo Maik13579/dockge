@@ -1,5 +1,5 @@
 <template>
-    <div class="shadow-box container" :class="compactLayout ? 'compact-container mb-2' : 'big-padding mb-3'">
+    <div class="shadow-box service-card" :class="compactLayout ? 'compact-container mb-2' : 'big-padding mb-3'">
         <div class="row service-summary">
             <div class="col-5 service-info">
                 <div class="service-identity">
@@ -34,35 +34,16 @@
             <div class="col-7 service-controls">
                 <div class="function">
                     <div class="service-actions" role="group">
-                        <router-link v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :to="terminalRouteLink" title="Bash" aria-label="Bash" disabled="">
-                            <font-awesome-icon icon="terminal" />
-                            <span :class="{ 'visually-hidden': compactLayout }">Bash</span>
-                        </router-link>
                         <button
                             v-if="!isEditMode && !isRunning"
                             class="btn btn-primary"
-                            :title="$t('startStack')"
-                            :aria-label="$t('startStack')"
+                            :title="$t('Up')"
+                            :aria-label="$t('Up')"
                             :disabled="processing"
                             @click="startService"
                         >
                             <font-awesome-icon icon="play" :class="{ 'me-1': !compactLayout }" />
-                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("startStack") }}</span>
-                        </button>
-                        <router-link v-if="!isEditMode && !compactLayout" class="btn btn-normal" :to="logsRouteLink" :title="$t('Logs')" :aria-label="$t('Logs')">
-                            <font-awesome-icon icon="stream" :class="{ 'me-1': !compactLayout }" />
-                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("Logs") }}</span>
-                        </router-link>
-                        <button
-                            v-if="!isEditMode && isRunning && !compactLayout"
-                            class="btn btn-normal"
-                            :title="$t('restartStack')"
-                            :aria-label="$t('restartStack')"
-                            :disabled="processing"
-                            @click="restartService"
-                        >
-                            <font-awesome-icon icon="rotate" :class="{ 'me-1': !compactLayout }" />
-                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("restartStack") }}</span>
+                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("Up") }}</span>
                         </button>
                         <button
                             v-if="!isEditMode && isRunning"
@@ -75,6 +56,33 @@
                             <font-awesome-icon icon="stop" :class="{ 'me-1': !compactLayout }" />
                             <span :class="{ 'visually-hidden': compactLayout }">{{ $t("stopStack") }}</span>
                         </button>
+                        <button v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :title="$t('Kill')" :aria-label="$t('Kill')" :disabled="processing" @click="killService">
+                            <font-awesome-icon icon="times-circle" class="me-1" />
+                            {{ $t("Kill") }}
+                        </button>
+                        <button
+                            v-if="!isEditMode && isRunning && !compactLayout"
+                            class="btn btn-normal"
+                            :title="$t('restartStack')"
+                            :aria-label="$t('restartStack')"
+                            :disabled="processing"
+                            @click="restartService"
+                        >
+                            <font-awesome-icon icon="rotate" :class="{ 'me-1': !compactLayout }" />
+                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("restartStack") }}</span>
+                        </button>
+                        <button v-if="!isEditMode && !compactLayout" class="btn btn-normal" :title="$t('Pull')" :aria-label="$t('Pull')" :disabled="processing" @click="pullService">
+                            <font-awesome-icon icon="cloud-arrow-down" class="me-1" />
+                            {{ $t("Pull") }}
+                        </button>
+                        <router-link v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :to="terminalRouteLink" :title="$t('Exec')" :aria-label="$t('Exec')">
+                            <font-awesome-icon icon="terminal" class="me-1" />
+                            {{ $t("Exec") }}
+                        </router-link>
+                        <router-link v-if="!isEditMode && !compactLayout" class="btn btn-normal" :to="logsRouteLink" :title="$t('Logs')" :aria-label="$t('Logs')">
+                            <font-awesome-icon icon="stream" class="me-1" />
+                            {{ $t("Logs") }}
+                        </router-link>
                     </div>
                 </div>
             </div>
@@ -266,6 +274,8 @@ export default defineComponent({
     emits: [
         "start-service",
         "stop-service",
+        "kill-service",
+        "pull-service",
         "restart-service",
         "update-service",
         "remove-service"
@@ -469,6 +479,12 @@ export default defineComponent({
         stopService() {
             this.$emit("stop-service", this.name);
         },
+        killService() {
+            this.$emit("kill-service", this.name);
+        },
+        pullService() {
+            this.$emit("pull-service", this.name);
+        },
         restartService() {
             this.$emit("restart-service", this.name);
         }
@@ -480,7 +496,25 @@ export default defineComponent({
 <style scoped lang="scss">
 @import "../styles/vars";
 
-.container {
+.service-card {
+    width: 100%;
+    min-width: 0;
+
+    .service-summary {
+        row-gap: 0.75rem;
+    }
+
+    .service-info {
+        flex: 1 1 12rem;
+        min-width: 0;
+        width: auto;
+    }
+
+    .service-controls {
+        width: auto;
+        max-width: 100%;
+    }
+
     .service-name {
         display: flex;
         align-items: center;
@@ -516,7 +550,7 @@ export default defineComponent({
 
     .service-actions {
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.5rem;
 
         .btn {
