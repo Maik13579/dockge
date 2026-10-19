@@ -8,6 +8,7 @@
 import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { TERMINAL_COLS, TERMINAL_ROWS } from "../../../common/util-common";
+import { searchTerminal } from "../terminal-search";
 
 export default {
     /**
@@ -72,6 +73,7 @@ export default {
             first: true,
             terminalInputBuffer: "",
             cursorPosition: 0,
+            searchSelecting: false,
         };
     },
     computed: {
@@ -168,6 +170,16 @@ export default {
     },
 
     methods: {
+        findText(query, options) {
+            // Search highlights must not trigger the automatic copy-on-selection.
+            this.searchSelecting = true;
+            try {
+                return searchTerminal(this.terminal, query, options);
+            } finally {
+                this.searchSelecting = false;
+            }
+        },
+
         bind(endpoint, name) {
             // Workaround: normally this.name should be set, but it is not sometimes, so we use the parameter, but eventually this.name and name must be the same name
             if (this.mode === "containerLogs") {
@@ -377,6 +389,9 @@ export default {
          * Handle text selection in terminal - copy to clipboard
          */
         handleSelection() {
+            if (this.searchSelecting) {
+                return;
+            }
             const selectedText = this.terminal.getSelection();
             if (selectedText && selectedText.length > 0) {
                 this.copyToClipboard(selectedText);

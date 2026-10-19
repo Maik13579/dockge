@@ -8,6 +8,7 @@ import { createMemoryHistory, createRouter } from "vue-router";
 import * as util from "../common/util-common";
 import { AgentSocket } from "../common/agent-socket";
 import * as editor from "../frontend/src/compose-editor.js";
+import { searchTerminal } from "../frontend/src/terminal-search.js";
 
 /** Execute the actual component script with browser/transport dependencies stubbed. */
 function component(file: string, modules = {}) {
@@ -27,8 +28,9 @@ function component(file: string, modules = {}) {
             host: "localhost" },
         require: name => modules[name] || (name.endsWith("util-common") ? util
             : name.endsWith("compose-editor") ? editor
-                : name.endsWith("agent-socket") ? { AgentSocket }
-                    : name === "vue" ? { defineComponent: options => options } : {}),
+                : name.endsWith("terminal-search") ? { searchTerminal }
+                    : name.endsWith("agent-socket") ? { AgentSocket }
+                        : name === "vue" ? { defineComponent: options => options } : {}),
         setTimeout: (fn, delay) => {
             timers.set(++nextTimer, { fn,
                 time: now + delay });
@@ -590,4 +592,61 @@ test("general settings loads and saves the edit-only Compose toggle with a disab
     page.settings.showComposeOnlyInEditMode = false;
     page.saveSettings();
     assert.equal(stored.showComposeOnlyInEditMode, false);
+});
+
+test("the log header returns to the correct stack and delegates search directions and clearing", () => {
+    const { instance: page, template } = component("../frontend/src/pages/ContainerLogs.vue");
+    page.$route.params = { stackName: "demo",
+        serviceName: "included" };
+    assert.equal(page.stackRoute, "/compose/demo");
+    page.$route.params.endpoint = "agent.example:5001";
+    assert.equal(page.stackRoute, "/compose/demo/agent.example%3A5001");
+    assert.match(template, /<router-link :to="stackRoute"/);
+    assert.match(template, /@keydown.enter.prevent="searchLogs\(\$event.shiftKey\)"/);
+    assert.match(template, /@keydown.esc.prevent="clearSearch"/);
+    const searches = [];
+    page.$refs.logs = { findText: (...args) => {
+        searches.push(args);
+        return args[0] === "error";
+    } };
+    page.searchQuery = "error";
+    page.searchLogs(false, true);
+    assert.equal(page.searchFound, true);
+    page.searchLogs(true);
+    assert.equal(searches[1][1].backwards, true);
+    assert.equal(searches[1][1].restart, false);
+    page.searchQuery = "missing";
+    page.searchLogs();
+    assert.equal(page.searchFound, false);
+    page.clearSearch();
+    assert.equal(page.searchQuery, "");
+    assert.equal(searches.at(-1)[0], "");
+    assert.equal(searches.at(-1)[1].restart, true);
+});
+
+test("programmatic search highlights do not overwrite the clipboard, while manual selection still copies", () => {
+    const { instance: terminal } = component("../frontend/src/components/Terminal.vue");
+    const copied = [];
+    terminal.copyToClipboard = text => copied.push(text);
+    const cell = { getWidth: () => 1,
+        getChars: () => "x" };
+    terminal.terminal = {
+        cols: 1,
+        rows: 1,
+        buffer: { active: { length: 1,
+            getNullCell: () => cell,
+            getLine: row => row === 0 ? { length: 1,
+                getCell: () => cell,
+                translateToString: () => "x" } : undefined } },
+        getSelectionPosition: () => undefined,
+        getSelection: () => "x",
+        select: () => terminal.handleSelection(),
+        scrollToLine: () => {},
+        clearSelection: () => {},
+    };
+    assert.equal(terminal.findText("x"), true);
+    assert.equal(terminal.searchSelecting, false);
+    assert.deepEqual(copied, []);
+    terminal.handleSelection();
+    assert.deepEqual(copied, [ "x" ]);
 });
