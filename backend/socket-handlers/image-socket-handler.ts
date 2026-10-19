@@ -18,7 +18,10 @@ export class ImageSocketHandler extends SocketHandler {
             }
         });
         socket.on("disconnect", () => server.imageTransfers.disconnect(socket));
-        socket.on("logout", () => server.imageTransfers.disconnect(socket));
+        socket.on("logout", () => {
+            socket.leave?.("images:" + socket.userID);
+            server.imageTransfers.disconnect(socket, true);
+        });
     }
 }
 

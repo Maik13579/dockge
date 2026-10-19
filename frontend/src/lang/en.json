@@ -188,6 +188,7 @@
     "Choose one .tar, .tar.gz or .tgz image archive": "Choose one .tar, .tar.gz or .tgz image archive",
     "Load this archive? Existing image tags may be replaced.": "Load this archive? Existing image tags may be replaced.",
     "Images": "Images",
+    "Image transfer progress": "Image transfer progress",
     "Docker device": "Docker device",
     "Offline": "Offline",
     "Refresh": "Refresh",

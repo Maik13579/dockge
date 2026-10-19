@@ -28,6 +28,7 @@ export interface ImageJob {
     label: string;
     state: "pending" | "transferring" | "loading" | "running" | "completed" | "failed" | "cancelled";
     bytes: number;
+    total?: number;
     message: string;
 }
 
@@ -39,6 +40,7 @@ export interface ImageRequest {
     destination?: string;
     confirmed?: boolean;
     filename?: string;
+    size?: number;
     jobId?: string;
 }
 

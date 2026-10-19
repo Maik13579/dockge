@@ -51,7 +51,7 @@
                 </dl>
                 <div class="d-flex flex-wrap gap-2">
                     <button class="btn btn-normal" :disabled="busy[image.id]" @click="download(image)">{{ $t("Download") }}</button>
-                    <button class="btn btn-normal" :disabled="busy[image.id] || destinations.length === 0" @click="openCopy(image)">{{ $t("Copy to…") }}</button>
+                    <button v-if="hasOnlineAgent && destinations.length > 0" class="btn btn-normal" :disabled="busy[image.id]" @click="openCopy(image)">{{ $t("Copy to…") }}</button>
                     <button class="btn btn-normal" :disabled="busy[image.id]" @click="openTag(image)">{{ $t("Tag") }}</button>
                     <button class="btn btn-danger" :disabled="busy[image.id] || image.containers.length > 0" :title="image.containers.length ? $t('Image is used by containers') : ''" @click="deleteImage(image)">{{ $t("Delete") }}</button>
                 </div>
@@ -66,7 +66,9 @@
                     <button v-if="activeJob(job)" class="btn btn-sm btn-normal ms-auto" @click="cancel(job)">{{ $t("Cancel") }}</button>
                 </div>
                 <small>{{ deviceName(job.endpoint) }}<template v-if="job.kind === 'copy'"> → {{ deviceName(job.destination) }}</template> · {{ bytes(job.bytes) }}</small>
-                <div v-if="job.total && activeJob(job)" class="progress mt-1"><div class="progress-bar" :style="{ width: Math.min(100, (job.uploaded || job.bytes) / job.total * 100) + '%' }"></div></div>
+                <div v-if="activeJob(job)" class="progress mt-1" role="progressbar" :aria-label="$t('Image transfer progress')" :aria-valuenow="jobPercent(job) ?? undefined" aria-valuemin="0" aria-valuemax="100">
+                    <div class="progress-bar progress-bar-striped progress-bar-animated" :style="{ width: (jobPercent(job) ?? 100) + '%' }">{{ jobPercent(job) === null ? '' : jobPercent(job) + '%' }}</div>
+                </div>
                 <div class="job-message">{{ job.message }}</div>
             </div>
         </div>

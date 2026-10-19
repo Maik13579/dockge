@@ -19,6 +19,7 @@ interface Command {
 interface Job {
     info: ImageJob;
     owner: DockgeSocket;
+    userID: number;
     controller: AbortController;
     lastUpdate: number;
 }
@@ -34,6 +35,8 @@ interface Ticket {
 /** Per-instance coordinator. Agent HTTP capabilities never reach the browser. */
 export class ImageTransfers {
     readonly service = new ImageService();
+
+    constructor(private publish?: (userID: number, job: ImageJob) => void) {}
     private tickets = new Map<string, Ticket>();
     private active = new Map<string, Set<AbortController>>();
     private jobs = new Map<string, Job>();
@@ -58,22 +61,63 @@ export class ImageTransfers {
         }
     }
 
-    disconnect(owner: DockgeSocket) {
+    private detached(job: Job): boolean {
+        return ![ "completed", "failed", "cancelled" ].includes(job.info.state)
+            && ([ "copy", "pull" ].includes(job.info.kind)
+                || (job.info.kind === "upload" && job.info.state === "loading")
+                || (job.info.kind === "download" && job.info.state === "transferring"));
+    }
+
+    hasDetachedJobs(owner: DockgeSocket): boolean {
+        return [ ...this.jobs.values() ].some(job => job.owner.id === owner.id && this.detached(job));
+    }
+
+    private release(owner: DockgeSocket) {
+        if (!owner.connected && !this.hasDetachedJobs(owner)) {
+            owner.instanceManager?.disconnectAll?.();
+        }
+    }
+
+    restore(owner: DockgeSocket): ImageJob[] {
+        const jobs = [ ...this.jobs.values() ].filter(job => job.userID === owner.userID && job.info.state !== "completed").map(job => ({ ...job.info }));
+        owner.emit("imageJobs", jobs);
+        return jobs;
+    }
+
+    pullProgress(owner: DockgeSocket, progress: { id: string; message: string }) {
+        const job = this.jobs.get(progress.id);
+        if (job && job.owner.id === owner.id && this.detached(job)) {
+            this.update(job, { message: progress.message }, true);
+        }
+    }
+
+    disconnect(owner: DockgeSocket, logout = false) {
+        const retained = new Set([ ...this.jobs.values() ].filter(job => job.owner.id === owner.id && !logout && this.detached(job)).map(job => job.controller));
         for (const [ id, ticket ] of this.tickets) {
-            if (ticket.owner.id === owner.id) {
+            if (ticket.owner.id === owner.id && !retained.has(ticket.controller)) {
                 clearTimeout(ticket.timer);
                 ticket.controller.abort();
                 this.tickets.delete(id);
             }
         }
         for (const controller of this.active.get(owner.id) || []) {
-            controller.abort();
+            if (!retained.has(controller)) {
+                controller.abort();
+            }
         }
-        this.active.delete(owner.id);
-        for (const [ id, job ] of this.jobs) {
-            if (job.owner.id === owner.id) {
-                job.controller.abort();
-                this.jobs.delete(id);
+        if (!retained.size) {
+            this.active.delete(owner.id);
+        }
+        for (const job of this.jobs.values()) {
+            if ((logout ? job.userID === owner.userID : job.owner.id === owner.id) && (logout || !this.detached(job))) {
+                if (![ "completed", "failed", "cancelled" ].includes(job.info.state)) {
+                    job.controller.abort();
+                    if (job.info.kind === "pull") {
+                        this.call(job.owner, job.info.endpoint, { action: "cancelPull",
+                            operationId: job.info.id }).catch(() => {});
+                    }
+                }
+                this.release(job.owner);
             }
         }
     }
@@ -112,7 +156,8 @@ export class ImageTransfers {
         this.tickets.delete(ticketID);
         clearTimeout(ticket.timer);
         const disconnected = () => {
-            if (!res.writableFinished) {
+            const loading = [ ...this.jobs.values() ].some(job => job.controller === ticket.controller && job.info.kind === "upload" && job.info.state === "loading");
+            if (!res.writableFinished && !loading) {
                 ticket.controller.abort();
             }
         };
@@ -273,8 +318,10 @@ export class ImageTransfers {
                 try {
                     await runDocker([ "image", "pull", reference ], controller.signal, text => {
                         if (Date.now() - last > 200) {
-                            owner.emitAgent("imagePullProgress", { id: request.operationId,
-                                message: text.slice(-500).trim() });
+                            const progress = { id: request.operationId!,
+                                message: text.slice(-500).trim() };
+                            this.pullProgress(owner, progress);
+                            owner.emitAgent("imagePullProgress", progress);
                             last = Date.now();
                         }
                     });
@@ -325,18 +372,23 @@ export class ImageTransfers {
     }
 
     private newJob(owner: DockgeSocket, request: ImageRequest, kind: ImageJob["kind"], label: string): Job {
-        const active = [ ...this.jobs.values() ].filter(job => job.owner.id === owner.id && ![ "completed", "failed", "cancelled" ].includes(job.info.state));
+        const active = [ ...this.jobs.values() ].filter(job => job.userID === owner.userID && ![ "completed", "failed", "cancelled" ].includes(job.info.state));
         if (active.length >= 4) {
             throw new Error("Wait for an image operation to finish or cancel one first");
         }
         // Keep completed history bounded for long-lived browser sessions.
         for (const [ id, job ] of this.jobs) {
-            if (job.owner.id === owner.id && [ "completed", "failed", "cancelled" ].includes(job.info.state)) {
+            if (job.userID === owner.userID && job.info.state === "completed") {
                 this.jobs.delete(id);
             }
         }
+        const previous = [ ...this.jobs.values() ].filter(job => job.userID === owner.userID && [ "failed", "cancelled" ].includes(job.info.state));
+        for (const old of previous.slice(0, Math.max(0, previous.length - 20))) {
+            this.jobs.delete(old.info.id);
+        }
         const job: Job = {
             owner,
+            userID: owner.userID,
             controller: new AbortController(),
             lastUpdate: 0,
             info: { id: randomBytes(16).toString("hex"),
@@ -365,7 +417,11 @@ export class ImageTransfers {
     private update(job: Job, changes: Partial<ImageJob>, throttle = false) {
         Object.assign(job.info, changes);
         if (!throttle || Date.now() - job.lastUpdate > 200) {
-            job.owner.emit("imageJob", job.info);
+            if (this.publish) {
+                this.publish(job.userID, { ...job.info });
+            } else {
+                job.owner.emit("imageJob", job.info);
+            }
             job.lastUpdate = Date.now();
         }
     }
@@ -386,6 +442,7 @@ export class ImageTransfers {
             throw error;
         } finally {
             this.untrack(job.owner, job.controller);
+            this.release(job.owner);
         }
     }
 
@@ -401,7 +458,7 @@ export class ImageTransfers {
         }
         if (request.action === "cancel") {
             const job = this.jobs.get(request.jobId || "");
-            if (!job || job.owner.id !== owner.id) {
+            if (!job || job.userID !== owner.userID) {
                 throw new Error("Image operation not found");
             }
             if (![ "completed", "failed", "cancelled" ].includes(job.info.state)) {
@@ -412,9 +469,9 @@ export class ImageTransfers {
                         this.tickets.delete(id);
                     }
                 }
-                this.untrack(owner, job.controller);
+                this.untrack(job.owner, job.controller);
                 if (job.info.kind === "pull") {
-                    await this.call(owner, job.info.endpoint, { action: "cancelPull",
+                    await this.call(job.owner, job.info.endpoint, { action: "cancelPull",
                         operationId: job.info.id }).catch(() => {});
                 }
             }
@@ -435,7 +492,11 @@ export class ImageTransfers {
             if (!request.confirmed || typeof request.filename !== "string" || !/\.(tar|tar\.gz|tgz)$/i.test(request.filename)) {
                 throw new Error("Confirm a .tar, .tar.gz or .tgz archive before uploading");
             }
+            if (request.size !== undefined && (!Number.isSafeInteger(request.size) || request.size < 0)) {
+                throw new Error("Invalid image archive size");
+            }
             const job = this.newJob(owner, request, "upload", request.filename.slice(0, 255));
+            this.update(job, { total: request.size });
             const { ticket, done } = this.chunkedImport(owner, async () => {
                 this.update(job, { state: "transferring" });
                 return this.destination(owner, request.endpoint, undefined, job.controller.signal, job.info.id);

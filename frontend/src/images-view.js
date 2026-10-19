@@ -1,4 +1,4 @@
-import { cancelUpload, imageRequest, uploadArchive } from "./images";
+import { cancelUpload, imageJobPercent, imageRequest, uploadArchive } from "./images";
 
 export default {
     data() {
@@ -35,6 +35,9 @@ export default {
         },
         available() {
             return this.online(this.endpoint) && this.supported;
+        },
+        hasOnlineAgent() {
+            return this.devices.some(device => device.endpoint && this.online(device.endpoint));
         },
         destinations() {
             return this.devices.filter(device => device.endpoint !== this.endpoint && this.online(device.endpoint)
@@ -80,6 +83,7 @@ export default {
         this.requestVersion++;
     },
     methods: {
+        jobPercent: imageJobPercent,
         deviceName(endpoint) {
             return this.$root.endpointDisplayFunction(endpoint);
         },

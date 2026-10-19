@@ -15,16 +15,30 @@ export function imageRequest(root, request) {
 export function updateImageJob(root, job) {
     root.imageJobs[job.id] = { ...root.imageJobs[job.id],
         ...job };
-    const finished = Object.values(root.imageJobs).filter(item => [ "completed", "failed", "cancelled" ].includes(item.state));
+    const finished = Object.values(root.imageJobs).filter(item => item.state === "completed");
     for (const old of finished.slice(0, Math.max(0, finished.length - 5))) {
         delete root.imageJobs[old.id];
     }
+}
+
+export function restoreImageJobs(root, jobs) {
+    const previous = root.imageJobs;
+    root.imageJobs = Object.fromEntries(jobs.filter(job => job.state !== "completed").map(job => [ job.id, { ...previous[job.id],
+        ...job }]));
+}
+
+export function imageJobPercent(job) {
+    if (!job.total || job.state !== "transferring") {
+        return null;
+    }
+    return Math.min(100, Math.floor((job.uploaded || job.bytes) / job.total * 100));
 }
 
 export async function uploadArchive(root, endpoint, file) {
     const result = await imageRequest(root, { action: "upload",
         endpoint,
         filename: file.name,
+        size: file.size,
         confirmed: true });
     const id = result.job.id;
     updateImageJob(root, { ...result.job,
@@ -84,9 +98,9 @@ export function disconnectImages(root) {
     uploads.forEach(xhr => xhr.abort());
     uploads.clear();
     for (const job of Object.values(root.imageJobs)) {
-        if (![ "completed", "failed", "cancelled" ].includes(job.state)) {
+        if (job.kind === "upload" && job.state !== "loading" && ![ "completed", "failed", "cancelled" ].includes(job.state)) {
             job.state = "cancelled";
-            job.message = "Disconnected; this operation cannot be resumed";
+            job.message = "Upload interrupted; select the archive again to restart it";
         }
     }
 }

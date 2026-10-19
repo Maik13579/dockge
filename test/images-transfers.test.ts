@@ -19,6 +19,9 @@ class Viewer extends EventEmitter {
     instanceManager = {};
     jobs = new Map<string, ImageJob>();
     emit(event: string, ...args: unknown[]) {
+        if (event === "imageJobs") {
+            this.jobs = new Map((args[0] as ImageJob[]).map(job => [ job.id, { ...job }]));
+        }
         if (event === "imageJob") {
             const job = args[0] as ImageJob;
             this.jobs.set(job.id, { ...job });
@@ -54,18 +57,24 @@ class Viewer extends EventEmitter {
 }
 
 async function host(t: TestContext) {
-    const transfers = new ImageTransfers();
     const peer = new Viewer();
+    const viewers = [ peer ];
+    const transfers = new ImageTransfers((userID, job) => {
+        for (const viewer of viewers.filter(viewer => viewer.connected && viewer.userID === userID)) {
+            viewer.emit("imageJob", job);
+        }
+    });
     const app = express();
     app.use(new ImageRouter().create(app, { imageTransfers: transfers } as DockgeServer));
     const server = http.createServer(app);
     await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
     t.after(async () => {
-        transfers.disconnect(peer.socket());
+        viewers.forEach(viewer => transfers.disconnect(viewer.socket(), true));
         await new Promise<void>(resolve => server.close(() => resolve()));
     });
     const address = server.address() as { port: number };
     return { transfers,
+        viewers,
         peer,
         url: `http://127.0.0.1:${address.port}` };
 }
@@ -189,13 +198,14 @@ test("download tickets allow only the correct method, one use and the owning liv
     await assert.rejects(remoteSource(archiveURL(main.url, second.ticket), new AbortController().signal), /403/);
 });
 
-test("cancellation is owner-only and cancelled tickets cannot start Docker", async t => {
+test("cancellation is user-only and cancelled tickets cannot start Docker", async t => {
     const calls = mockDocker(t, defaultDocker);
     const { main, viewer } = await network(t);
     const result = await main.transfers.request(viewer.socket(), { action: "download",
         endpoint: "",
         id: idA });
     const other = new Viewer();
+    other.userID = 2;
     await assert.rejects(main.transfers.request(other.socket(), { action: "cancel",
         endpoint: "",
         jobId: result.job!.id }), /not found/);
@@ -324,4 +334,155 @@ test("stream backpressure bounds read-ahead while a destination is slow", async 
         done }, new AbortController().signal, byteCounter(() => {}));
     assert.equal(consumed, 64);
     assert.ok(maxAhead < 10, "Slow consumers must stop Docker output from accumulating in memory");
+});
+
+test("agent copies survive F5, restore for the same user and release old connections after completion", async t => {
+    let release: () => void;
+    let started: () => void;
+    const loading = new Promise<void>(resolve => started = resolve);
+    mockDocker(t, args => {
+        if (args[1] === "save") {
+            return { output: Buffer.from("archive bytes") };
+        }
+        if (args[1] === "load") {
+            started();
+            return new Promise(resolve => release = () => resolve({ output: "Loaded image" }));
+        }
+        return defaultDocker(args);
+    });
+    const { main, viewer } = await network(t);
+    let disconnected = 0;
+    Object.assign(viewer.instanceManager, { disconnectAll: () => disconnected++ });
+    const result = await main.transfers.request(viewer.socket(), { action: "copy",
+        endpoint: "a",
+        destination: "b",
+        id: idA,
+        confirmed: true });
+    await loading;
+    viewer.connected = false;
+    main.transfers.disconnect(viewer.socket());
+    assert.equal(main.transfers.hasDetachedJobs(viewer.socket()), true);
+    assert.equal(disconnected, 0);
+    const refreshed = new Viewer();
+    main.viewers.push(refreshed);
+    const restored = main.transfers.restore(refreshed.socket());
+    assert.equal(restored.length, 1);
+    assert.equal(restored[0].id, result.job!.id);
+    assert.ok(restored[0].bytes > 0);
+    assert.equal(restored[0].state, "loading");
+    const other = new Viewer();
+    other.userID = 2;
+    assert.deepEqual(main.transfers.restore(other.socket()), []);
+    release!();
+    assert.equal((await refreshed.result(result.job!.id)).state, "completed");
+    assert.equal(disconnected, 1);
+    assert.deepEqual(main.transfers.restore(new Viewer().socket()), [], "Completed copies can disappear after refresh");
+});
+
+test("a refreshed session can cancel the original copy and logout cancels background jobs", async t => {
+    let started: () => void;
+    let loading = new Promise<void>(resolve => started = resolve);
+    mockDocker(t, args => {
+        if (args[1] === "save") {
+            return { output: Buffer.from("archive") };
+        }
+        if (args[1] === "load") {
+            started();
+            return new Promise(() => {});
+        }
+        return defaultDocker(args);
+    });
+    const { main, viewer } = await network(t);
+    const first = await main.transfers.request(viewer.socket(), { action: "copy",
+        endpoint: "a",
+        destination: "b",
+        id: idA,
+        confirmed: true });
+    await loading;
+    viewer.connected = false;
+    main.transfers.disconnect(viewer.socket());
+    const refreshed = new Viewer();
+    main.viewers.push(refreshed);
+    main.transfers.restore(refreshed.socket());
+    await main.transfers.request(refreshed.socket(), { action: "cancel",
+        endpoint: "",
+        jobId: first.job!.id });
+    assert.equal((await refreshed.result(first.job!.id)).state, "cancelled");
+    loading = new Promise<void>(resolve => started = resolve);
+    refreshed.instanceManager = viewer.instanceManager;
+    const second = await main.transfers.request(refreshed.socket(), { action: "copy",
+        endpoint: "a",
+        destination: "b",
+        id: idA,
+        confirmed: true });
+    await loading;
+    main.transfers.disconnect(refreshed.socket(), true);
+    assert.equal((await refreshed.result(second.job!.id)).state, "cancelled");
+});
+
+test("an upload already loading in Docker survives a browser disconnect and restores its known size", async t => {
+    let release: () => void;
+    let started: () => void;
+    const loading = new Promise<void>(resolve => started = resolve);
+    mockDocker(t, args => {
+        if (args[1] === "load") {
+            started();
+            return new Promise(resolve => release = () => resolve({ output: "Loaded image" }));
+        }
+        return defaultDocker(args);
+    });
+    const { main, viewer } = await network(t);
+    const result = await main.transfers.request(viewer.socket(), { action: "upload",
+        endpoint: "a",
+        filename: "image.tar",
+        size: 7,
+        confirmed: true });
+    const controller = new AbortController();
+    const destination = remoteDestination(archiveURL(main.url, result.ticket), controller.signal);
+    const transfer = transferImage({ stream: Readable.from([ Buffer.from("archive") ]),
+        done: Promise.resolve() }, destination, controller.signal, byteCounter(() => {}));
+    await loading;
+    viewer.connected = false;
+    main.transfers.disconnect(viewer.socket());
+    const refreshed = new Viewer();
+    main.viewers.push(refreshed);
+    const restored = main.transfers.restore(refreshed.socket());
+    assert.equal(restored[0].total, 7);
+    assert.equal(restored[0].state, "loading");
+    const interrupted = assert.rejects(transfer);
+    controller.abort();
+    await interrupted;
+    release!();
+    assert.equal((await refreshed.result(result.job!.id)).state, "completed");
+});
+
+test("registry pulls keep their execution context after refresh and can be cancelled by the new session", async t => {
+    let started: () => void;
+    const pulling = new Promise<void>(resolve => started = resolve);
+    mockDocker(t, args => {
+        if (args[1] === "pull") {
+            started();
+            return new Promise(() => {});
+        }
+        return defaultDocker(args);
+    });
+    const { main, viewer } = await network(t);
+    const result = await main.transfers.request(viewer.socket(), { action: "pull",
+        endpoint: "a",
+        reference: "example/app:latest" });
+    await pulling;
+    viewer.connected = false;
+    main.transfers.disconnect(viewer.socket());
+    main.transfers.pullProgress(viewer.socket(), { id: result.job!.id,
+        message: "Pulling layer" });
+    const refreshed = new Viewer();
+    main.viewers.push(refreshed);
+    const snapshot = main.transfers.restore(refreshed.socket());
+    assert.equal(snapshot[0].kind, "pull");
+    assert.equal(snapshot[0].state, "running");
+    assert.equal(snapshot[0].message, "Pulling layer");
+    await main.transfers.request(refreshed.socket(), { action: "cancel",
+        endpoint: "",
+        jobId: result.job!.id });
+    assert.equal((await refreshed.result(result.job!.id)).state, "cancelled");
 });

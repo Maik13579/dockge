@@ -8,7 +8,7 @@ import { AgentSocket } from "../common/agent-socket";
 import { ImageTransfers } from "../backend/image-transfers";
 import { ImageAgentSocketHandler, ImageSocketHandler } from "../backend/socket-handlers/image-socket-handler";
 import type { DockgeSocket } from "../backend/util-server";
-import type { DockgeServer } from "../backend/dockge-server";
+import { DockgeServer } from "../backend/dockge-server";
 
 test("images group tags by full ID and include untagged images with exact container references", async t => {
     mockDocker(t, args => {
@@ -125,4 +125,27 @@ test("agent capabilities reject old/offline instances and aborted requests relea
     controller.abort();
     await assert.rejects(pending, /cancelled/);
     assert.equal(client.listenerCount("disconnect"), 0);
+});
+
+test("logging in as another user leaves the previous image-job subscription", async () => {
+    const rooms = new Set([ "socket", "images:1" ]);
+    const socket = {
+        id: "socket",
+        userID: 1,
+        rooms,
+        join: room => rooms.add(room),
+        leave: room => rooms.delete(room),
+        emit() {},
+        instanceManager: { sendAgentList() {},
+            connectAll() {} },
+    } as unknown as DockgeSocket;
+    const server = {
+        imageTransfers: new ImageTransfers(),
+        sendInfo() {},
+        sendStackList() {},
+    } as unknown as DockgeServer;
+    await DockgeServer.prototype.afterLogin.call(server, socket, { id: 2 } as Parameters<DockgeServer["afterLogin"]>[1]);
+    assert.equal(rooms.has("images:1"), false);
+    assert.equal(rooms.has("images:2"), true);
+    assert.equal(socket.userID, 2);
 });

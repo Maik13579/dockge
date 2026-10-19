@@ -4,7 +4,7 @@ import { defineComponent } from "vue";
 import jwtDecode from "jwt-decode";
 import { Terminal } from "@xterm/xterm";
 import { AgentSocket } from "../../../common/agent-socket";
-import { updateImageJob, disconnectImages } from "../images";
+import { updateImageJob, restoreImageJobs, disconnectImages } from "../images";
 
 let socket : Socket;
 
@@ -288,6 +288,7 @@ export default defineComponent({
                 this.agentCapabilities[res.endpoint] = res.imageManagement === true;
             });
             socket.on("imageJob", job => updateImageJob(this, job));
+            socket.on("imageJobs", jobs => restoreImageJobs(this, jobs));
             agentSocket.on("imagePullProgress", (res) => {
                 if (this.imageJobs[res.id]) {
                     this.imageJobs[res.id].message = res.message;

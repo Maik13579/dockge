@@ -20,7 +20,7 @@ export class AgentManager {
     protected imageAgents: Record<string, { url: string; supported: boolean }> = {};
     protected _firstConnectTime : Dayjs = dayjs();
 
-    constructor(socket: DockgeSocket) {
+    constructor(socket: DockgeSocket, private imageProgress?: (progress: { id: string; message: string }) => void) {
         this.socket = socket;
     }
 
@@ -195,6 +195,9 @@ export class AgentManager {
         });
 
         client.on("agent", (...args : unknown[]) => {
+            if (args[0] === "imagePullProgress") {
+                this.imageProgress?.(args[1] as { id: string; message: string });
+            }
             this.socket.emit("agent", ...args);
         });
 

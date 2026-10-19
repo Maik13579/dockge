@@ -4,7 +4,7 @@ import { test } from "node:test";
 import vm from "node:vm";
 import ts from "typescript";
 import { parse, compileTemplate } from "vue/compiler-sfc";
-import { uploadArchive, updateImageJob } from "../frontend/src/images.js";
+import { disconnectImages, imageJobPercent, restoreImageJobs, uploadArchive, updateImageJob } from "../frontend/src/images.js";
 
 function view(request = async () => ({ images: [] }), storage = {}) {
     const context = vm.createContext({ exports: {},
@@ -12,7 +12,8 @@ function view(request = async () => ({ images: [] }), storage = {}) {
         window: { confirm: () => true },
         require: () => ({ imageRequest: (_root, input) => request(input),
             cancelUpload() {},
-            uploadArchive() {} }) });
+            uploadArchive() {},
+            imageJobPercent }) });
     vm.runInContext(ts.transpileModule(readFileSync(new URL("../frontend/src/images-view.js", import.meta.url), "utf8"), {
         compilerOptions: { module: ts.ModuleKind.CommonJS },
     }).outputText, context);
@@ -169,4 +170,39 @@ test("browser uploads use bounded chunks and keep progress outside the Home comp
     updateImageJob(root, { id: job.id,
         state: "completed" });
     assert.equal(root.imageJobs[job.id].total, data.length);
+});
+
+test("job snapshots restore active operations and omit completed transfers", () => {
+    const root = { imageJobs: { old: { id: "old",
+        state: "completed" } } };
+    restoreImageJobs(root, [{ id: "copy",
+        kind: "copy",
+        state: "transferring",
+        bytes: 1024 }, { id: "done",
+        state: "completed" }]);
+    assert.deepEqual(Object.keys(root.imageJobs), [ "copy" ]);
+    disconnectImages(root);
+    assert.equal(root.imageJobs.copy.state, "transferring", "A websocket disconnect must not mark server copies as cancelled");
+    assert.equal(imageJobPercent(root.imageJobs.copy), null, "An unknown archive size uses an indeterminate bar");
+    assert.equal(imageJobPercent({ state: "transferring",
+        bytes: 25,
+        total: 100 }), 25);
+    assert.equal(imageJobPercent({ state: "loading",
+        bytes: 100,
+        total: 100 }), null);
+    const source = readFileSync(new URL("../frontend/src/components/Images.vue", import.meta.url), "utf8");
+    assert.match(source, /v-if="activeJob\(job\)" class="progress/);
+    assert.match(source, /progress-bar-striped progress-bar-animated/);
+});
+
+test("Copy to is hidden without an online agent", () => {
+    const { instance } = view();
+    instance.$root.agentStatusList.a = "offline";
+    assert.equal(instance.hasOnlineAgent, false);
+    assert.equal(instance.destinations.length, 0);
+    instance.$root.agentStatusList.a = "online";
+    assert.equal(instance.hasOnlineAgent, true);
+    assert.equal(instance.destinations.length, 1);
+    const template = readFileSync(new URL("../frontend/src/components/Images.vue", import.meta.url), "utf8");
+    assert.match(template, /<button v-if="hasOnlineAgent && destinations.length > 0"[^>]*@click="openCopy/);
 });

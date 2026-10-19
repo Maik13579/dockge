@@ -48,7 +48,7 @@ export class DockgeServer {
     io : socketIO.Server;
     config : Config;
     indexHTML : string = "";
-    imageTransfers = new ImageTransfers();
+    imageTransfers = new ImageTransfers((userID, job) => this.io.to("images:" + userID).emit("imageJob", job));
 
     /**
      * List of express routers
@@ -257,7 +257,7 @@ export class DockgeServer {
 
         this.io.on("connection", async (socket: Socket) => {
             let dockgeSocket = socket as DockgeSocket;
-            dockgeSocket.instanceManager = new AgentManager(dockgeSocket);
+            dockgeSocket.instanceManager = new AgentManager(dockgeSocket, progress => this.imageTransfers.pullProgress(dockgeSocket, progress));
             dockgeSocket.emitAgent = (event : string, ...args : unknown[]) => {
                 let obj = args[0];
                 if (typeof(obj) === "object") {
@@ -318,7 +318,9 @@ export class DockgeServer {
             // Socket disconnect
             dockgeSocket.on("disconnect", () => {
                 log.info("server", "Socket disconnected!");
-                dockgeSocket.instanceManager.disconnectAll();
+                if (!this.imageTransfers.hasDetachedJobs(dockgeSocket)) {
+                    dockgeSocket.instanceManager.disconnectAll();
+                }
             });
 
         });
@@ -337,6 +339,13 @@ export class DockgeServer {
     async afterLogin(socket : DockgeSocket, user : User) {
         socket.userID = user.id;
         socket.join(user.id.toString());
+        for (const room of socket.rooms) {
+            if (room.startsWith("images:")) {
+                socket.leave(room);
+            }
+        }
+        socket.join("images:" + user.id);
+        this.imageTransfers.restore(socket);
 
         this.sendInfo(socket);
 
