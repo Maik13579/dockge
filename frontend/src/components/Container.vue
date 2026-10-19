@@ -34,7 +34,7 @@
                             <font-awesome-icon icon="play" class="me-1" />
                             {{ $t("startStack") }}
                         </button>
-                        <router-link v-if="!isEditMode" class="btn btn-normal" :to="logsRouteLink" target="_blank" rel="noopener">
+                        <router-link v-if="!isEditMode" class="btn btn-normal" :to="logsRouteLink">
                             <font-awesome-icon icon="stream" class="me-1" />
                             {{ $t("Logs") }}
                         </router-link>

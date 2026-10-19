@@ -418,7 +418,7 @@ test("terminal output arriving before the join acknowledgement is displayed", ()
     assert.deepEqual(output, [ "Starting\r\n", "", "Started\r\n" ]);
 });
 
-test("container log links open a separate local or remote page and action grids have four or two buttons", () => {
+test("container log links navigate like Bash and action grids have four or two buttons", () => {
     const { instance: card, template } = component("../frontend/src/components/Container.vue");
     const page = { endpoint: "",
         stack: { name: "demo" } };
@@ -437,7 +437,8 @@ test("container log links open a separate local or remote page and action grids 
     card.serviceStatus = [{ state: "running" }];
     assert.equal(visible().length, 4);
     assert.match(visible()[0], /terminalRouteLink/);
-    assert.match(visible()[1], /logsRouteLink.*target="_blank".*rel="noopener"/);
+    assert.match(visible()[1], /logsRouteLink/);
+    assert.doesNotMatch(visible()[1], /target=/);
     card.serviceStatus = [{ state: "exited" }];
     assert.equal(visible().length, 2);
     assert.match(visible()[0], /startService/);
