@@ -609,7 +609,7 @@ export class Stack {
                 return statusList;
             }
 
-            const addLine = (obj: { Service: string, State: string, Name: string, Health: string }) => {
+            const addLine = (obj: { Service: string, State: string, Name: string, Health: string, ExitCode?: number }) => {
                 states.push(obj.State);
                 if (!statusList.has(obj.Service)) {
                     statusList.set(obj.Service, []);
@@ -618,7 +618,8 @@ export class Stack {
                     status: obj.Health || obj.State,
                     state: obj.State,
                     health: obj.Health,
-                    name: obj.Name
+                    name: obj.Name,
+                    ...(typeof obj.ExitCode === "number" ? { exitCode: obj.ExitCode } : {}),
                 });
             };
 

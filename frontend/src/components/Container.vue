@@ -1,60 +1,79 @@
 <template>
-    <div class="shadow-box big-padding mb-3 container">
-        <div class="row">
-            <div class="col-5">
-                <h4>{{ name }}</h4>
-                <span v-if="isIncluded" class="badge bg-secondary mb-2">{{ $t(hasOverrides ? "Overrides" : "Included") }}</span>
-                <div class="image mb-2">
+    <div class="shadow-box container" :class="compactLayout ? 'compact-container mb-2' : 'big-padding mb-3'">
+        <div class="row service-summary">
+            <div class="col-5 service-info">
+                <div class="service-identity">
+                    <div class="service-name">
+                        <h4 :title="name">{{ name }}</h4>
+                        <button v-if="compact && !isEditMode" type="button" class="btn btn-sm btn-normal details-toggle" :title="$t(expandedCompact ? 'Hide details' : 'Show details')" :aria-label="$t(expandedCompact ? 'Hide details' : 'Show details')" :aria-expanded="expandedCompact" @click="expandedCompact = !expandedCompact">
+                            <font-awesome-icon :icon="expandedCompact ? 'chevron-up' : 'chevron-down'" />
+                        </button>
+                    </div>
+                    <span v-if="isIncluded && !compactLayout" class="badge bg-secondary mb-2">{{ $t(hasOverrides ? "Overrides" : "Included") }}</span>
+                </div>
+                <div v-show="!compactLayout" class="image mb-2">
                     <span class="me-1">{{ imageName }}:</span><span class="tag">{{ imageTag }}</span>
                 </div>
-                <div v-if="!isEditMode">
+                <div v-if="!isEditMode" class="service-status">
                     <span class="badge me-1" :class="bgStyle">{{ status }}</span>
                     <span v-if="health" class="badge me-1" :class="health === 'unhealthy' ? 'bg-danger' : 'bg-secondary'">
                         {{ $t("Health") }}: {{ health }}
                     </span>
 
-                    <a v-for="(port, index) in envsubstService.ports" :key="index" :href="parsePort(port).url" target="_blank">
-                        <span class="badge me-1 bg-secondary">{{ parsePort(port).display }}</span>
-                    </a>
+                    <template v-if="!compactLayout">
+                        <a v-for="(port, index) in envsubstService.ports" :key="index" :href="parsePort(port).url" target="_blank">
+                            <span class="badge me-1 bg-secondary">{{ parsePort(port).display }}</span>
+                        </a>
+                    </template>
+                </div>
+                <div v-if="compactLayout" class="compact-stats stats" :title="serviceStatus && serviceStatus.length > 1 ? $t('Expand for per-container statistics') : ''">
+                    <span>{{ $t("CPU") }}: {{ compactStats?.CPUPerc || "—" }}</span>
+                    <span>{{ $t("memoryAbbreviated") }}: {{ compactStats?.MemUsage || "—" }}</span>
                 </div>
             </div>
-            <div class="col-7">
+            <div class="col-7 service-controls">
                 <div class="function">
                     <div class="service-actions" role="group">
-                        <router-link v-if="!isEditMode && isRunning" class="btn btn-normal" :to="terminalRouteLink" disabled="">
+                        <router-link v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :to="terminalRouteLink" title="Bash" aria-label="Bash" disabled="">
                             <font-awesome-icon icon="terminal" />
-                            Bash
+                            <span :class="{ 'visually-hidden': compactLayout }">Bash</span>
                         </router-link>
                         <button
                             v-if="!isEditMode && !isRunning"
                             class="btn btn-primary"
+                            :title="$t('startStack')"
+                            :aria-label="$t('startStack')"
                             :disabled="processing"
                             @click="startService"
                         >
-                            <font-awesome-icon icon="play" class="me-1" />
-                            {{ $t("startStack") }}
+                            <font-awesome-icon icon="play" :class="{ 'me-1': !compactLayout }" />
+                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("startStack") }}</span>
                         </button>
-                        <router-link v-if="!isEditMode" class="btn btn-normal" :to="logsRouteLink">
-                            <font-awesome-icon icon="stream" class="me-1" />
-                            {{ $t("Logs") }}
+                        <router-link v-if="!isEditMode && !compactLayout" class="btn btn-normal" :to="logsRouteLink" :title="$t('Logs')" :aria-label="$t('Logs')">
+                            <font-awesome-icon icon="stream" :class="{ 'me-1': !compactLayout }" />
+                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("Logs") }}</span>
                         </router-link>
                         <button
-                            v-if="!isEditMode && isRunning"
+                            v-if="!isEditMode && isRunning && !compactLayout"
                             class="btn btn-normal"
+                            :title="$t('restartStack')"
+                            :aria-label="$t('restartStack')"
                             :disabled="processing"
                             @click="restartService"
                         >
-                            <font-awesome-icon icon="rotate" class="me-1" />
-                            {{ $t("restartStack") }}
+                            <font-awesome-icon icon="rotate" :class="{ 'me-1': !compactLayout }" />
+                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("restartStack") }}</span>
                         </button>
                         <button
                             v-if="!isEditMode && isRunning"
                             class="btn btn-normal"
+                            :title="$t('stopStack')"
+                            :aria-label="$t('stopStack')"
                             :disabled="processing"
                             @click="stopService"
                         >
-                            <font-awesome-icon icon="stop" class="me-1" />
-                            {{ $t("stopStack") }}
+                            <font-awesome-icon icon="stop" :class="{ 'me-1': !compactLayout }" />
+                            <span :class="{ 'visually-hidden': compactLayout }">{{ $t("stopStack") }}</span>
                         </button>
                     </div>
                 </div>
@@ -72,7 +91,7 @@
                 {{ $t("deleteContainer") }}
             </button>
         </div>
-        <div v-else-if="statsInstances.length > 0" class="mt-2">
+        <div v-else-if="!compactLayout && statsInstances.length > 0" class="mt-2">
             <div class="d-flex align-items-center gap-3">
                 <template v-if="!expandedStats">
                     <div class="stats">
@@ -211,6 +230,10 @@ export default defineComponent({
         DockerStat
     },
     props: {
+        compact: {
+            type: Boolean,
+            default: false,
+        },
         isIncluded: {
             type: Boolean,
             default: false,
@@ -251,9 +274,19 @@ export default defineComponent({
         return {
             showConfig: false,
             expandedStats: false,
+            expandedCompact: false,
         };
     },
     computed: {
+
+        compactLayout() {
+            return !!this.compact && !this.isEditMode && !this.expandedCompact;
+        },
+
+        compactStats() {
+            // Replicas have separate statistics in the expanded card.
+            return this.serviceStatus?.length === 1 && this.statsInstances.length === 1 ? this.statsInstances[0] : null;
+        },
 
         networkList() {
             let list = [];
@@ -448,6 +481,22 @@ export default defineComponent({
 @import "../styles/vars";
 
 .container {
+    .service-name {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+
+        h4 {
+            min-width: 0;
+            overflow-wrap: anywhere;
+        }
+    }
+
+    .details-toggle {
+        flex-shrink: 0;
+        padding: 0.15rem 0.4rem;
+    }
+
     .image {
         font-size: 0.8rem;
         color: #6c757d;
@@ -480,6 +529,68 @@ export default defineComponent({
     .stats {
         font-size: 0.8rem;
         color: #6c757d;
+    }
+
+    &.compact-container {
+        padding: 0.5rem 0.75rem;
+
+        .service-summary {
+            display: grid;
+            grid-template-columns: minmax(0, 1fr) auto;
+            align-items: center;
+            gap: 0.75rem;
+            margin: 0;
+        }
+
+        .service-info,
+        .service-controls {
+            width: auto;
+            padding: 0;
+        }
+
+        .service-info,
+        .service-identity,
+        .service-status,
+        .compact-stats {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 0.25rem 0.75rem;
+            min-width: 0;
+        }
+
+        .service-identity {
+            flex: 1 1 10rem;
+        }
+
+        .service-name {
+            flex: 1;
+            min-width: 0;
+
+            h4 {
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+                font-size: 0.95rem;
+                margin: 0;
+            }
+        }
+
+        .compact-stats span {
+            white-space: nowrap;
+        }
+
+        .service-actions {
+            grid-template-columns: none;
+            grid-auto-flow: column;
+            grid-auto-columns: 2rem;
+            gap: 0.25rem;
+
+            .btn {
+                padding: 0.25rem;
+                font-size: 0.875rem;
+            }
+        }
     }
 }
 </style>

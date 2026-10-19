@@ -128,6 +128,25 @@ test("service polling keeps container state separate from health and updates sta
     assert.equal(stack.status, CREATED_FILE);
 });
 
+test("service polling retains exit codes so failed containers can sort above clean exits", async (t) => {
+    const { server } = await fixture(t);
+    t.mock.method(childProcessAsync, "spawn", () => Promise.resolve({ stdout: JSON.stringify([
+        { Service: "failed",
+            State: "exited",
+            Health: "",
+            Name: "failed-1",
+            ExitCode: 1 },
+        { Service: "finished",
+            State: "exited",
+            Health: "",
+            Name: "finished-1",
+            ExitCode: 0 },
+    ]) }) as ReturnType<typeof childProcessAsync.spawn>);
+    const services = await new Stack(server, "test").getServiceStatusList();
+    assert.equal(Reflect.get(services.get("failed")![0], "exitCode"), 1);
+    assert.equal(Reflect.get(services.get("finished")![0], "exitCode"), 0);
+});
+
 for (const command of [ "stop", "down" ] as const) {
     test(`${command} cancels Update between Pull and Up even without a running terminal`, async (t) => {
         const { server } = await fixture(t);

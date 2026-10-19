@@ -107,7 +107,13 @@
                     </div>
 
                     <!-- Containers -->
-                    <h4 class="mb-3">{{ $tc("container", 2) }}</h4>
+                    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+                        <h4 class="mb-0">{{ $tc("container", 2) }}</h4>
+                        <div v-if="!isEditMode" class="btn-group" role="group" :aria-label="$t('Container view')">
+                            <button type="button" class="btn btn-sm btn-normal" :class="{ active: !compactView }" :aria-pressed="!compactView" @click="setContainerView(false)">{{ $t("Cards") }}</button>
+                            <button type="button" class="btn btn-sm btn-normal" :class="{ active: compactView }" :aria-pressed="compactView" @click="setContainerView(true)">{{ $t("Compact") }}</button>
+                        </div>
+                    </div>
                     <div v-if="!showComposeFiles && resolvingConfig" class="mb-3 text-secondary" role="status">{{ $t("Resolving Compose configuration...") }}</div>
                     <div v-if="!showComposeFiles && configError" class="mb-3 text-warning" role="alert">{{ $t("Compose configuration could not be resolved") }}: {{ configError }}</div>
                     <div v-if="serviceStatusError" class="text-warning mb-3" role="status">
@@ -128,11 +134,12 @@
 
                     <div ref="containerList">
                         <Container
-                            v-for="(service, name) in serviceConfig.services"
+                            v-for="(name, index) in sortedServiceNames"
                             :key="name"
                             :name="name"
+                            :compact="compactView"
                             :is-edit-mode="isEditMode"
-                            :first="name === Object.keys(serviceConfig.services)[0]"
+                            :first="index === 0"
                             :is-included="!jsonConfig.services[name]"
                             :has-overrides="!!overrideConfig.services[name]"
                             :serviceStatus="serviceStatusList[name]"
@@ -262,6 +269,7 @@
 
 <script>
 import CodeMirror from "vue-codemirror6";
+import { containerStatusGroup } from "../container-status";
 import { yaml } from "@codemirror/lang-yaml";
 import { python } from "@codemirror/lang-python";
 import { dracula as editorTheme } from "thememirror";
@@ -294,6 +302,8 @@ services:
 `;
 const envDefault = "# VARIABLE=value #comment";
 const validationDelay = 3000;
+const serviceNameCollator = new Intl.Collator(undefined, { numeric: true,
+    sensitivity: "base" });
 
 let yamlErrorTimeout = null;
 
@@ -372,6 +382,7 @@ export default {
             serviceStatusRequest: 0,
             serviceStatusError: "",
             dockerStats: {},
+            compactView: localStorage.containerView === "compact",
             isEditMode: false,
             submitted: false,
             showDeleteDialog: false,
@@ -383,6 +394,16 @@ export default {
     computed: {
         stackBusy() {
             return this.processing || Object.keys(this.serviceOperations).length > 0;
+        },
+
+        sortedServiceNames() {
+            const names = Object.keys(this.serviceConfig.services);
+            // Keep forms in source order while editing, including newly added services.
+            if (this.isEditMode) {
+                return names;
+            }
+            return names.sort((left, right) => containerStatusGroup(this.serviceStatusList[left]) - containerStatusGroup(this.serviceStatusList[right])
+                || serviceNameCollator.compare(left, right));
         },
 
         activeYAML: {
@@ -628,6 +649,11 @@ export default {
         this.configRequest++;
     },
     methods: {
+        setContainerView(compact) {
+            this.compactView = compact;
+            localStorage.containerView = compact ? "compact" : "cards";
+        },
+
         startServiceStatusTimeout() {
             clearTimeout(this.serviceStatusTimeout);
             this.serviceStatusTimeout = setTimeout(() => {

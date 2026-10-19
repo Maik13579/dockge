@@ -9,9 +9,10 @@ import * as util from "../common/util-common";
 import { AgentSocket } from "../common/agent-socket";
 import * as editor from "../frontend/src/compose-editor.js";
 import { searchTerminal } from "../frontend/src/terminal-search.js";
+import * as containerStatus from "../frontend/src/container-status.js";
 
 /** Execute the actual component script with browser/transport dependencies stubbed. */
-function component(file: string, modules = {}) {
+function component(file: string, modules = {}, storage = {}) {
     const source = readFileSync(new URL(file, import.meta.url), "utf8");
     const descriptor = file.endsWith(".vue") ? parse(source).descriptor : null;
     const script = descriptor?.script?.content || source;
@@ -22,15 +23,16 @@ function component(file: string, modules = {}) {
         exports: {},
         console,
         process: { env: {} },
-        localStorage: {},
+        localStorage: storage,
         window: { removeEventListener() {} },
         location: { protocol: "http:",
             host: "localhost" },
         require: name => modules[name] || (name.endsWith("util-common") ? util
             : name.endsWith("compose-editor") ? editor
                 : name.endsWith("terminal-search") ? { searchTerminal }
-                    : name.endsWith("agent-socket") ? { AgentSocket }
-                        : name === "vue" ? { defineComponent: options => options } : {}),
+                    : name.endsWith("container-status") ? containerStatus
+                        : name.endsWith("agent-socket") ? { AgentSocket }
+                            : name === "vue" ? { defineComponent: options => options } : {}),
         setTimeout: (fn, delay) => {
             timers.set(++nextTimer, { fn,
                 time: now + delay });
@@ -649,4 +651,92 @@ test("programmatic search highlights do not overwrite the clipboard, while manua
     assert.deepEqual(copied, []);
     terminal.handleSelection();
     assert.deepEqual(copied, [ "x" ]);
+});
+
+test("compact view is opt-in and remembers the browser preference across stack pages", () => {
+    const storage = {};
+    const { instance: page, template } = component("../frontend/src/pages/Compose.vue", {}, storage);
+    assert.equal(page.compactView, false);
+    page.setContainerView(true);
+    assert.equal(storage.containerView, "compact");
+    const next = component("../frontend/src/pages/Compose.vue", {}, storage).instance;
+    assert.equal(next.compactView, true);
+    next.setContainerView(false);
+    assert.equal(storage.containerView, "cards");
+    assert.match(template, /:compact="compactView"/);
+    assert.match(template, /v-if="!isEditMode"[^>]*:aria-label="\$t\('Container view'\)"/);
+});
+
+test("compact rows show only Start or Stop, and expansion restores the original controls and metrics", () => {
+    const { instance: card, template } = component("../frontend/src/components/Container.vue");
+    card.compact = true;
+    card.isEditMode = false;
+    card.serviceStatus = [{ state: "running",
+        name: "api-1" }];
+    card.dockerStats = { "api-1": { CPUPerc: "2.5%",
+        MemUsage: "100MiB / 8GiB" } };
+    const actions = template.match(/<div class="service-actions"[\s\S]*?<\/div>/)[0];
+    const tags = actions.match(/<(?:button|router-link)\b(?:[^">]|"[^"]*")*>/g);
+    const visible = () => tags.filter(tag => vm.runInNewContext(tag.match(/v-if="([^"]+)"/)[1], card));
+    assert.equal(card.compactLayout, true);
+    assert.equal(visible().length, 1);
+    assert.match(visible()[0], /stopService/);
+    assert.equal(card.compactStats.CPUPerc, "2.5%");
+    assert.equal(card.compactStats.MemUsage, "100MiB / 8GiB");
+    card.expandedCompact = true;
+    assert.equal(card.compactLayout, false);
+    assert.equal(visible().length, 4);
+    assert.match(visible()[0], /terminalRouteLink/);
+    assert.match(visible()[1], /logsRouteLink/);
+    assert.match(visible()[2], /restartService/);
+    card.expandedCompact = false;
+    card.serviceStatus = [{ state: "exited",
+        name: "api-1" }];
+    assert.equal(visible().length, 1);
+    assert.match(visible()[0], /startService/);
+    card.expandedCompact = true;
+    assert.equal(visible().length, 2);
+    card.isEditMode = true;
+    card.expandedCompact = false;
+    assert.equal(card.compactLayout, false, "Editing must always use the original card");
+    assert.equal(visible().length, 0);
+    card.serviceStatus.push({ state: "running",
+        name: "api-2" });
+    assert.equal(card.compactStats, null, "Do not show one replica's usage as the entire service");
+});
+
+test("services sort errors/restarts, running, exited, then inactive with names inside each group", () => {
+    const { instance: page, template } = component("../frontend/src/pages/Compose.vue");
+    page.isEditMode = false;
+    const sourceNames = [ "inactive-z", "running10", "unhealthy", "exited-z", "restarting", "running2", "exited-a", "inactive-a", "failed" ];
+    page.jsonConfig.services = Object.fromEntries(sourceNames.map(name => [ name, { image: "test" }]));
+    page.resolvedEditorServices = { included: { image: "included" } };
+    page.serviceStatusList = {
+        unhealthy: [{ state: "running",
+            health: "unhealthy" }],
+        restarting: [{ state: "restarting" }],
+        running10: [{ state: "running",
+            health: "starting" }],
+        running2: [{ state: "running" }],
+        "exited-z": [{ state: "exited",
+            exitCode: 0 }],
+        "exited-a": [{ state: "exited" }],
+        "inactive-z": [{ state: "created" }],
+        failed: [{ state: "exited",
+            exitCode: 1 }],
+    };
+    assert.deepEqual(Array.from(page.sortedServiceNames), [ "failed", "restarting", "unhealthy", "running2", "running10", "exited-a", "exited-z", "inactive-a", "inactive-z", "included" ]);
+    page.compactView = true;
+    assert.equal(page.sortedServiceNames[0], "failed", "Both views must use the same order");
+    page.serviceStatusList["inactive-a"] = [{ state: "restarting" }];
+    assert.equal(page.sortedServiceNames[1], "inactive-a", "New status snapshots must immediately update the order");
+    assert.deepEqual(Object.keys(page.jsonConfig.services), sourceNames, "Sorting must not rewrite Compose services");
+    assert.match(template, /v-for="\(name, index\) in sortedServiceNames"/);
+    assert.match(template, /:key="name"/);
+    page.isEditMode = true;
+    assert.deepEqual(Array.from(page.sortedServiceNames), [ ...sourceNames, "included" ], "Editing keeps source order for stable forms");
+    assert.equal(containerStatus.containerStatusGroup([{ state: "running" }, { state: "restarting" }]), 0);
+    assert.equal(containerStatus.containerStatusGroup([{ state: "running" }, { state: "exited" }]), 1);
+    assert.equal(containerStatus.containerStatusGroup([{ state: "dead" }]), 0);
+    assert.equal(containerStatus.containerStatusGroup([{ state: "paused" }]), 1);
 });
