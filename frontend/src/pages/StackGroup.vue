@@ -62,14 +62,12 @@
                     <button class="btn btn-sm btn-normal" :class="{ active: compactView }" :aria-pressed="compactView" @click="setContainerView(true)">{{ $t("Compact") }}</button>
                 </div>
             </div>
-            <div v-for="row in rows" :key="row.key">
-                <div class="small text-secondary mb-1">{{ row.member.agentName }} / {{ row.member.stackName }} <span v-if="row.member.error">({{ $t("Unavailable") }})</span></div>
-                <Container
-                    :name="row.name" :context="containerContext(row)" :compact="compactView" :service-status="row.member.serviceStatusList?.[row.name]" :docker-stats="row.member.dockerStats || {}"
-                    @start-service="runServiceOperation('startService', row)" @stop-service="runServiceOperation('stopService', row)"
-                    @kill-service="runServiceOperation('killService', row)" @restart-service="runServiceOperation('restartService', row)" @pull-service="runServiceOperation('pullService', row)"
-                />
-            </div>
+            <Container
+                v-for="row in rows" :key="row.key"
+                :name="row.name" :group-label="`${row.member.agentName}/${row.member.stackName}`" :context="containerContext(row)" :compact="compactView" :service-status="row.member.serviceStatusList?.[row.name]" :docker-stats="row.member.dockerStats || {}"
+                @start-service="runServiceOperation('startService', row)" @stop-service="runServiceOperation('stopService', row)"
+                @kill-service="runServiceOperation('killService', row)" @restart-service="runServiceOperation('restartService', row)" @pull-service="runServiceOperation('pullService', row)"
+            />
             <template v-if="selectedMember">
                 <div class="d-flex align-items-center gap-2 mb-3">
                     <h4 class="mb-0">{{ $t("terminal") }}</h4>

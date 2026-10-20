@@ -1010,6 +1010,13 @@ test("group container context preserves shared controls and namespaces logs and 
     assert.equal(card.isRunning, true);
     assert.equal(card.logsRouteLink.params.endpoint, endpoint);
     assert.equal(card.terminalRouteLink.params.endpoint, endpoint);
+    card.groupLabel = "Jetson/core";
+    card.compact = true;
+    assert.equal(card.displayName, "Jetson/core/app");
+    assert.equal(card.name, "app", "The display prefix must not change the service identity");
+    assert.equal(card.logsRouteLink.params.serviceName, "app");
+    card.expandedCompact = true;
+    assert.equal(card.displayName, "app", "Expanded rows use the original card heading");
     card.context.stopping = true;
     assert.equal(card.processing, true);
 });

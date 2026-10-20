@@ -2,6 +2,7 @@
     <div class="shadow-box service-card" :class="compactLayout ? 'compact-container mb-2' : 'big-padding mb-3'">
         <div class="row service-summary">
             <div class="col-5 service-info">
+                <div v-if="groupLabel && !compactLayout" class="group-label small text-secondary mb-1">{{ groupLabel }}</div>
                 <div class="service-identity">
                     <div v-if="compactLayout" class="service-status">
                         <span class="badge me-1" :class="bgStyle">{{ status }}</span>
@@ -13,7 +14,7 @@
                         <button v-if="compact && !isEditMode" type="button" class="btn btn-sm btn-normal details-toggle" :title="$t(expandedCompact ? 'Hide details' : 'Show details')" :aria-label="$t(expandedCompact ? 'Hide details' : 'Show details')" :aria-expanded="expandedCompact" @click="expandedCompact = !expandedCompact">
                             <font-awesome-icon :icon="expandedCompact ? 'chevron-up' : 'chevron-down'" />
                         </button>
-                        <h4 :title="name">{{ name }}</h4>
+                        <h4 :title="displayName">{{ displayName }}</h4>
                     </div>
                     <span v-if="isIncluded && !compactLayout" class="badge bg-secondary mb-2">{{ $t(hasOverrides ? "Overrides" : "Included") }}</span>
                 </div>
@@ -244,6 +245,10 @@ export default defineComponent({
         DockerStat
     },
     props: {
+        groupLabel: {
+            type: String,
+            default: "",
+        },
         context: {
             type: Object,
             default: null,
@@ -304,6 +309,10 @@ export default defineComponent({
 
         compactLayout() {
             return !!this.compact && !this.isEditMode && !this.expandedCompact;
+        },
+
+        displayName() {
+            return this.compactLayout && this.groupLabel ? `${this.groupLabel}/${this.name}` : this.name;
         },
 
         compactStats() {
@@ -526,6 +535,10 @@ export default defineComponent({
     .service-controls {
         width: auto;
         max-width: 100%;
+    }
+
+    .group-label {
+        overflow-wrap: anywhere;
     }
 
     .service-name {
