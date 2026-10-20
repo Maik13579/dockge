@@ -72,6 +72,12 @@
                 <label class="form-check-label" for="agent-friendly-names">{{ $t("Show friendly agent names instead of IP:port") }}</label>
             </div>
 
+            <div class="mb-4">
+                <label for="ignored-container-exit-codes" class="form-label">{{ $t("Ignored container exit codes") }}</label>
+                <input id="ignored-container-exit-codes" v-model="ignoredExitCodesInput" class="form-control" type="text" placeholder="137, 143" :disabled="!settingsLoaded" aria-describedby="ignored-exit-codes-help" />
+                <div id="ignored-exit-codes-help" class="form-text">{{ $t("Separate exit codes with commas. Leave empty to flag all nonzero exits. Confirmed OOM kills remain errors. Applies to stacks on this device.") }}</div>
+            </div>
+
             <!-- Save Button -->
             <div>
                 <button class="btn btn-primary" type="submit">
@@ -99,6 +105,15 @@ export default {
     },
 
     computed: {
+        ignoredExitCodesInput: {
+            get() {
+                const value = this.settings.ignoredContainerExitCodes;
+                return Array.isArray(value) ? value.join(", ") : value || "";
+            },
+            set(value) {
+                this.settings.ignoredContainerExitCodes = value;
+            },
+        },
         settings() {
             return this.$parent.$parent.$parent.settings;
         },

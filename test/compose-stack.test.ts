@@ -12,9 +12,11 @@ import { DockerSocketHandler } from "../backend/agent-socket-handlers/docker-soc
 import { AgentSocket } from "../common/agent-socket";
 import { CREATED_FILE, CREATED_STACK, EXITED, RUNNING, UNKNOWN } from "../common/util-common";
 import { Settings } from "../backend/settings";
+import { MainSocketHandler } from "../backend/socket-handlers/main-socket-handler";
 
 /** Build a saved include-based stack without starting Docker or a terminal. */
 async function fixture(t: TestContext) {
+    t.mock.method(Settings, "get", async () => undefined);
     const directory = await fs.mkdtemp(path.join(os.tmpdir(), "dockge-stack-test-"));
     t.after(() => fs.rm(directory, {
         recursive: true,
@@ -507,7 +509,7 @@ test("service polling counts failed replicas while keeping running controls and 
             State: "exited",
             Health: "",
             Name: "app-2",
-            ExitCode: 137 },
+            ExitCode: 1 },
     ];
     t.mock.method(childProcessAsync, "spawn", async () => ({ stdout: rows.map(row => JSON.stringify(row)).join("\n") }) as Awaited<ReturnType<typeof childProcessAsync.spawn>>);
     await stack.getServiceStatusList();
@@ -517,4 +519,81 @@ test("service polling counts failed replicas while keeping running controls and 
     await stack.getServiceStatusList();
     assert.equal(stack.errorCount, 0);
     assert.equal(stack.status, CREATED_FILE);
+});
+
+test("signal exit snapshots inspect OOM state and carry the target device's ignored-code policy", async t => {
+    const { server } = await fixture(t);
+    let ignored = [ 137, 143 ];
+    t.mock.method(Settings, "get", async () => ignored);
+    let oomKilled = false;
+    let inspectFailed = false;
+    const execution = t.mock.method(childProcessAsync, "spawn", async (_command, args) => {
+        if (inspectFailed) {
+            throw new Error("Inspection temporarily unavailable");
+        }
+        return { stdout: args[0] === "inspect" ? JSON.stringify({ project: "test",
+            state: "exited",
+            exitCode: 137,
+            health: "",
+            oomKilled })
+            : JSON.stringify([{ ID: "123456789abc",
+                Service: "app",
+                State: "exited",
+                Health: "",
+                Name: "app-1",
+                ExitCode: 137 }]) } as Awaited<ReturnType<typeof childProcessAsync.spawn>>;
+    });
+    const stack = new Stack(server, "test");
+    let services = await stack.getServiceStatusList();
+    assert.equal(stack.errorCount, 0);
+    assert.equal(Reflect.get(services.get("app")![0], "exitCodeIgnored"), true);
+    assert.equal(Reflect.get(services.get("app")![0], "oomKilled"), false);
+    assert.deepEqual(execution.mock.calls[1].arguments[1].slice(-1), [ "123456789abc" ]);
+    oomKilled = true;
+    services = await stack.getServiceStatusList();
+    assert.equal(stack.errorCount, 1);
+    assert.equal(Reflect.get(services.get("app")![0], "oomKilled"), true);
+    inspectFailed = true;
+    await assert.rejects(stack.getServiceStatusList(), /temporarily unavailable/);
+    assert.equal(stack.errorCount, 1);
+    inspectFailed = false;
+    oomKilled = false;
+    ignored = [];
+    services = await stack.getServiceStatusList();
+    assert.equal(stack.errorCount, 1);
+    assert.equal(Reflect.get(services.get("app")![0], "exitCodeIgnored"), false);
+});
+
+test("settings RPC validates ignored exit codes before side effects and persists normalized lists", async t => {
+    const { server } = await fixture(t);
+    const events = new Map();
+    const socket = { userID: 1,
+        on: (event, handler) => events.set(event, handler) } as unknown as DockgeSocket;
+    Object.assign(server, { sendInfo: async () => {} });
+    new MainSocketHandler().create(socket, server);
+    let stored = {};
+    t.mock.method(Settings, "getSettings", async () => stored);
+    const saved = [];
+    t.mock.method(Settings, "setSettings", async (_type, data) => {
+        saved.push(data.ignoredContainerExitCodes);
+    });
+    const env = path.join(server.stacksDir, "global.env");
+    await fs.writeFile(env, "KEEP=this\n");
+    let reply;
+    await events.get("getSettings")(result => reply = result);
+    assert.deepEqual(reply.data.ignoredContainerExitCodes, [ 137, 143 ]);
+    stored = { ignoredContainerExitCodes: [] };
+    await events.get("getSettings")(result => reply = result);
+    assert.deepEqual(reply.data.ignoredContainerExitCodes, []);
+    await events.get("setSettings")({ ignoredContainerExitCodes: "256" }, undefined, result => reply = result);
+    assert.equal(reply.ok, false);
+    assert.equal(saved.length, 0);
+    assert.equal(await fs.readFile(env, "utf8"), "KEEP=this\n");
+    await events.get("setSettings")({ ignoredContainerExitCodes: "137,143,2,2" }, undefined, result => reply = result);
+    assert.equal(reply.ok, true);
+    assert.deepEqual(saved, [[ 137, 143, 2 ]]);
+    socket.userID = 0;
+    await events.get("setSettings")({ ignoredContainerExitCodes: [] }, undefined, result => reply = result);
+    assert.equal(reply.ok, false);
+    assert.equal(saved.length, 1);
 });

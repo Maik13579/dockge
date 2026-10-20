@@ -21,8 +21,8 @@ import childProcessAsync from "promisify-child-process";
 import { Settings } from "./settings";
 import { resolveComposeConfig } from "./compose-config";
 import { composeStatus } from "./compose-status";
-import { countContainerIssues } from "../common/container-status";
-import { getProjectErrorCounts } from "./container-errors";
+import { countContainerIssues, parseIgnoredExitCodes } from "../common/container-status";
+import { getProjectErrorCounts, inspectContainerStates } from "./container-errors";
 
 export class Stack {
 
@@ -366,7 +366,7 @@ export class Stack {
         const composeList = res.stdout ? JSON.parse(res.stdout.toString()) : [];
         let errors: Map<string, number> | undefined;
         try {
-            errors = await getProjectErrorCounts();
+            errors = await getProjectErrorCounts(parseIgnoredExitCodes(await Settings.get("ignoredContainerExitCodes")));
         } catch (error) {
             log.warn("getStackList", `Could not refresh container errors: ${error instanceof Error ? error.message : String(error)}`);
         }
@@ -649,7 +649,8 @@ export class Stack {
                 return statusList;
             }
 
-            const addLine = (obj: { Service: string, State: string, Name: string, Health: string, ExitCode?: number }) => {
+            const ignoredExitCodes = parseIgnoredExitCodes(await Settings.get("ignoredContainerExitCodes"));
+            const addLine = (obj: { Service: string, State: string, Name: string, Health: string, ExitCode?: number, OOMKilled?: boolean }) => {
                 states.push(obj.State);
                 if (!statusList.has(obj.Service)) {
                     statusList.set(obj.Service, []);
@@ -659,7 +660,9 @@ export class Stack {
                     state: obj.State,
                     health: obj.Health,
                     name: obj.Name,
-                    ...(typeof obj.ExitCode === "number" ? { exitCode: obj.ExitCode } : {}),
+                    ...(typeof obj.ExitCode === "number" ? { exitCode: obj.ExitCode,
+                        exitCodeIgnored: ignoredExitCodes.includes(obj.ExitCode) } : {}),
+                    ...(typeof obj.OOMKilled === "boolean" ? { oomKilled: obj.OOMKilled } : {}),
                 });
             };
 
@@ -672,6 +675,18 @@ export class Stack {
                 containers = Array.isArray(parsed) ? parsed : [ parsed ];
             } catch {
                 containers = output.split("\n").filter(line => line.trim()).map(line => JSON.parse(line));
+            }
+            const signalExits = containers.filter((container: { State: string; ExitCode?: number }) => container.State === "exited" && [ 137, 143 ].includes(container.ExitCode ?? 0));
+            if (signalExits.length) {
+                // A failed inspection must not silently clear a previously confirmed OOM error.
+                const inspected = await inspectContainerStates(signalExits.map((container: { ID?: string; Name: string }) => container.ID || container.Name));
+                signalExits.forEach((container: { State: string; ExitCode?: number; Health?: string; OOMKilled?: boolean }, index: number) => {
+                    const current = inspected[index];
+                    Object.assign(container, { State: current.state,
+                        ExitCode: current.exitCode,
+                        Health: current.health,
+                        OOMKilled: current.oomKilled });
+                });
             }
             for (const container of containers) {
                 addLine(container);

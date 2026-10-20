@@ -44,6 +44,7 @@
 
 <script>
 import { useRoute } from "vue-router";
+import { parseIgnoredExitCodes } from "../../../common/container-status";
 
 export default {
     data() {
@@ -120,6 +121,7 @@ export default {
         loadSettings() {
             this.$root.getSocket().emit("getSettings", (res) => {
                 this.settings = res.data;
+                this.settings.ignoredContainerExitCodes = parseIgnoredExitCodes(this.settings.ignoredContainerExitCodes);
                 if (this.settings.showOnlyManagedStacks === undefined) {
                     this.settings.showOnlyManagedStacks = false;
                 }
@@ -168,6 +170,12 @@ export default {
          * @returns {Object} Contains success state and error msg
          */
         validateSettings() {
+            try {
+                this.settings.ignoredContainerExitCodes = parseIgnoredExitCodes(this.settings.ignoredContainerExitCodes);
+            } catch (error) {
+                return { success: false,
+                    msg: this.$t(error.message) };
+            }
             if (this.settings.keepDataPeriodDays < 0) {
                 return {
                     success: false,

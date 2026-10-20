@@ -346,6 +346,7 @@ export default defineComponent({
                     : this.$t({ restarting: "Restarting",
                         unhealthy: "Unhealthy",
                         dead: "Dead",
+                        oom: "Out of memory",
                         error: "Error" }[issue]);
             });
         },

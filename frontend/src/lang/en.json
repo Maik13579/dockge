@@ -266,5 +266,9 @@
     "Exited with code {code}": "Exited with code {code}",
     "Restarting": "Restarting",
     "Unhealthy": "Unhealthy",
-    "Dead": "Dead"
+    "Dead": "Dead",
+    "Out of memory": "Out of memory",
+    "Ignored container exit codes": "Ignored container exit codes",
+    "Ignored exit codes must be whole numbers between 0 and 255": "Ignored exit codes must be whole numbers between 0 and 255",
+    "Separate exit codes with commas. Leave empty to flag all nonzero exits. Confirmed OOM kills remain errors. Applies to stacks on this device.": "Separate exit codes with commas. Leave empty to flag all nonzero exits. Confirmed OOM kills remain errors. Applies to stacks on this device."
 }

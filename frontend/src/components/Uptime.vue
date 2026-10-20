@@ -3,7 +3,7 @@
 </template>
 
 <script>
-import { statusColor, statusNameShort } from "../../../common/util-common";
+import { EXITED, statusColor, statusNameShort } from "../../../common/util-common";
 
 export default {
     props: {
@@ -29,6 +29,9 @@ export default {
         color() {
             if (this.stack?.errorCount > 0) {
                 return "danger";
+            }
+            if (this.stack?.status === EXITED && this.stack.errorCount === 0) {
+                return "secondary";
             }
             return statusColor(this.stack?.status);
         },

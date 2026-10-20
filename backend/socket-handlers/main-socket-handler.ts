@@ -18,6 +18,7 @@ import {
 import { passwordStrength } from "check-password-strength";
 import jwt from "jsonwebtoken";
 import { Settings } from "../settings";
+import { parseIgnoredExitCodes } from "../../common/container-status";
 import fs, { promises as fsAsync } from "fs";
 import path from "path";
 
@@ -243,6 +244,7 @@ export class MainSocketHandler extends SocketHandler {
             try {
                 checkLogin(socket);
                 const data = await Settings.getSettings("general");
+                data.ignoredContainerExitCodes = parseIgnoredExitCodes(data.ignoredContainerExitCodes);
 
                 if (fs.existsSync(path.join(server.stacksDir, "global.env"))) {
                     data.globalENV = fs.readFileSync(path.join(server.stacksDir, "global.env"), "utf-8");
@@ -268,6 +270,9 @@ export class MainSocketHandler extends SocketHandler {
         socket.on("setSettings", async (data, currentPassword, callback) => {
             try {
                 checkLogin(socket);
+                if (data.ignoredContainerExitCodes !== undefined) {
+                    data.ignoredContainerExitCodes = parseIgnoredExitCodes(data.ignoredContainerExitCodes);
+                }
 
                 // If currently is disabled auth, don't need to check
                 // Disabled Auth + Want to Disable Auth => No Check

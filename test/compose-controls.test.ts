@@ -11,6 +11,7 @@ import { AgentSocket } from "../common/agent-socket";
 import * as editor from "../frontend/src/compose-editor.js";
 import { searchTerminal } from "../frontend/src/terminal-search.js";
 import * as containerStatus from "../frontend/src/container-status.js";
+import * as runtimeStatus from "../common/container-status";
 
 /** Execute the actual component script with browser/transport dependencies stubbed. */
 function component(file: string, modules = {}, storage = {}, browser = {}) {
@@ -36,7 +37,7 @@ function component(file: string, modules = {}, storage = {}, browser = {}) {
         require: name => modules[name] || (name.endsWith("stack-groups") ? stackGroups : name.endsWith("util-common") ? util
             : name.endsWith("compose-editor") ? editor
                 : name.endsWith("terminal-search") ? { searchTerminal }
-                    : name.endsWith("container-status") ? containerStatus
+                    : name.endsWith("container-status") ? (name.includes("common/") ? runtimeStatus : containerStatus)
                         : name.endsWith("agent-socket") ? { AgentSocket }
                             : name === "vue" ? { defineComponent: options => options } : {}),
         setTimeout: (fn, delay) => {
@@ -1064,15 +1065,15 @@ test("failed replicas are highlighted in both container views without hiding run
             health: "healthy" },
         { name: "app-2",
             state: "exited",
-            exitCode: 137 },
+            exitCode: 1 },
     ];
     for (const compact of [ false, true ]) {
         card.compact = compact;
         assert.equal(card.hasErrors, true);
-        assert.equal(card.displayStatus, "Exited with code 137");
+        assert.equal(card.displayStatus, "Exited with code 1");
         assert.equal(card.bgStyle, "bg-danger");
         assert.equal(card.isRunning, true);
-        assert.equal(card.errorDetails, "app-2: Exited with code 137");
+        assert.equal(card.errorDetails, "app-2: Exited with code 1");
     }
     assert.match(template, /'service-error': !isEditMode && hasErrors/);
     assert.equal(containerStatus.containerStatusGroup(card.serviceStatus), 0);
@@ -1102,6 +1103,8 @@ test("stack badges display errors separately from the running status and clear o
     badge.stack.errorCount = 0;
     assert.equal(badge.color, "primary");
     assert.equal(badge.statusName, "active");
+    badge.stack.status = util.EXITED;
+    assert.equal(badge.color, "secondary", "An intentionally stopped stack should be neutral");
 });
 
 test("service poll updates the page and sidebar error counts, including older agents", () => {
@@ -1125,4 +1128,59 @@ test("service poll updates the page and sidebar error counts, including older ag
         serviceStatusList: { app: [{ state: "running" }] } });
     assert.equal(page.containerErrorCount, 0);
     assert.equal(page.globalStack.errorCount, 0);
+});
+
+test("signal stops are neutral while confirmed OOM kills and agent-specific policies stay visible", () => {
+    const { instance: card } = component("../frontend/src/components/Container.vue");
+    for (const exitCode of [ 137, 143 ]) {
+        card.serviceStatus = [{ state: "exited",
+            exitCode,
+            oomKilled: false }];
+        assert.equal(card.hasErrors, false);
+        assert.equal(card.bgStyle, "bg-secondary");
+        assert.equal(containerStatus.containerStatusGroup(card.serviceStatus), 2);
+    }
+    card.serviceStatus = [{ state: "exited",
+        exitCode: 137,
+        oomKilled: true,
+        exitCodeIgnored: true }];
+    assert.equal(card.hasErrors, true);
+    assert.equal(card.displayStatus, "Out of memory");
+    assert.equal(card.bgStyle, "bg-danger");
+    card.serviceStatus = [{ state: "exited",
+        exitCode: 2,
+        exitCodeIgnored: true }];
+    assert.equal(card.hasErrors, false, "Use the target agent's policy");
+    card.serviceStatus = [{ state: "exited",
+        exitCode: 137,
+        exitCodeIgnored: false }];
+    assert.equal(card.hasErrors, true, "An agent may choose to flag signal exit codes");
+});
+
+test("ignored exit code settings load, normalize and reject invalid entries before saving", () => {
+    const { instance: settings } = component("../frontend/src/pages/Settings.vue");
+    let saved;
+    const errors = [];
+    settings.$root.getSocket = () => ({ emit(event, ...args) {
+        if (event === "getSettings") {
+            args[0]({ ok: true,
+                data: {} });
+        } else if (event === "setSettings") {
+            saved = args[0];
+        }
+    } });
+    settings.$root.toastError = message => errors.push(message);
+    settings.loadSettings();
+    assert.deepEqual(Array.from(settings.settings.ignoredContainerExitCodes), [ 137, 143 ]);
+    settings.settings.ignoredContainerExitCodes = "137, 143, 2, 2";
+    settings.saveSettings();
+    assert.deepEqual(Array.from(saved.ignoredContainerExitCodes), [ 137, 143, 2 ]);
+    saved = null;
+    settings.settings.ignoredContainerExitCodes = "999";
+    settings.saveSettings();
+    assert.equal(saved, null);
+    assert.equal(errors.length, 1);
+    settings.settings.ignoredContainerExitCodes = "";
+    assert.equal(settings.validateSettings().success, true);
+    assert.deepEqual(Array.from(settings.settings.ignoredContainerExitCodes), []);
 });
