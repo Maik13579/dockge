@@ -234,6 +234,7 @@
     "copy": "Copy",
     "pull": "Pull",
     "pending": "Pending",
+    "preparing": "Preparing archive",
     "transferring": "Transferring",
     "loading": "Loading",
     "running": "Running",

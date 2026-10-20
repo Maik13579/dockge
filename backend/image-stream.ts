@@ -1,4 +1,8 @@
 import childProcess from "node:child_process";
+import { createReadStream, createWriteStream } from "node:fs";
+import fs from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import http from "node:http";
 import https from "node:https";
 import { Readable, Transform, Writable } from "node:stream";
@@ -7,6 +11,8 @@ import { pipeline } from "node:stream/promises";
 export interface ImageSource {
     stream: Readable;
     done: Promise<void>;
+    size?: number;
+    dispose?: () => Promise<void>;
 }
 
 export interface ImageDestination {
@@ -40,11 +46,43 @@ function dockerStream(args: string[], signal: AbortSignal) {
         done };
 }
 
-export function saveImage(references: string[], signal: AbortSignal): ImageSource {
-    const { child, done } = dockerStream([ "image", "save", ...references ], signal);
-    child.stdin.end();
-    return { stream: child.stdout,
-        done };
+/** Finish the archive before exposing it, so its byte size is exact. */
+export async function saveImage(references: string[], signal: AbortSignal): Promise<ImageSource> {
+    const directory = await fs.mkdtemp(path.join(tmpdir(), "dockge-image-"));
+    const filename = path.join(directory, "image.tar");
+    let stream: Readable | undefined;
+    let docker: ReturnType<typeof dockerStream> | undefined;
+    let writing: Promise<void> | undefined;
+    const dispose = async () => {
+        stream?.destroy();
+        await fs.rm(directory, { recursive: true,
+            force: true });
+    };
+    try {
+        signal.throwIfAborted();
+        docker = dockerStream([ "image", "save", ...references ], signal);
+        docker.child.stdin.end();
+        writing = pipeline(docker.child.stdout, createWriteStream(filename, { flags: "wx",
+            mode: 0o600 }), { signal });
+        await Promise.all([ writing, docker.done ]);
+        signal.throwIfAborted();
+        const { size } = await fs.stat(filename);
+        // Bound the read to the known length: clients can finish immediately on
+        // Content-Length, so avoid a further asynchronous read just to find EOF.
+        stream = createReadStream(filename, size > 0 ? { end: size - 1 } : undefined);
+        // A consumer may still be opening the destination when reading fails.
+        stream.on("error", () => {});
+        return { stream,
+            size,
+            done: Promise.resolve(),
+            dispose };
+    } catch (error) {
+        docker?.child.kill();
+        docker?.child.stdout.destroy();
+        await writing?.catch(() => {});
+        await dispose();
+        throw error;
+    }
 }
 
 export function loadImage(signal: AbortSignal): ImageDestination {
@@ -123,14 +161,22 @@ export async function remoteSource(url: URL, signal: AbortSignal): Promise<Image
     if (stream.statusCode !== 200) {
         await responseText(stream);
     }
+    stream.on("error", () => {});
+    const length = stream.headers["content-length"];
+    const size = length === undefined ? undefined : Number(length);
     return { stream,
-        done: Promise.resolve() };
+        size: size !== undefined && Number.isSafeInteger(size) && size >= 0 ? size : undefined,
+        done: Promise.resolve(),
+        dispose: async () => {
+            stream.destroy();
+        } };
 }
 
-export function remoteDestination(url: URL, signal: AbortSignal): ImageDestination {
+export function remoteDestination(url: URL, signal: AbortSignal, progress: (bytes: number) => void = () => {}, loading: () => void = () => {}): ImageDestination {
     // Bounded requests preserve normal HTTP request timeouts on every instance.
     const buffer = Buffer.allocUnsafe(8 * 1024 * 1024);
     let length = 0;
+    let sent = 0;
     let succeeded = false;
     let resolveDone: (message: string) => void;
     let rejectDone: (error: Error) => void;
@@ -155,6 +201,8 @@ export function remoteDestination(url: URL, signal: AbortSignal): ImageDestinati
             }
             url = new URL(result.ticket, url);
         }
+        sent += length;
+        progress(sent);
         length = 0;
         return result.message || "Image loaded";
     };
@@ -174,7 +222,14 @@ export function remoteDestination(url: URL, signal: AbortSignal): ImageDestinati
             })().then(() => callback(), callback);
         },
         final(callback) {
-            send(true).then(message => {
+            (async () => {
+                // Acknowledge the last bytes before switching to Docker loading.
+                if (length > 0) {
+                    await send(false);
+                }
+                loading();
+                return send(true);
+            })().then(message => {
                 succeeded = true;
                 resolveDone(message);
                 callback();

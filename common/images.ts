@@ -26,7 +26,7 @@ export interface ImageJob {
     endpoint: string;
     destination?: string;
     label: string;
-    state: "pending" | "transferring" | "loading" | "running" | "completed" | "failed" | "cancelled";
+    state: "pending" | "preparing" | "transferring" | "loading" | "running" | "completed" | "failed" | "cancelled";
     bytes: number;
     total?: number;
     message: string;

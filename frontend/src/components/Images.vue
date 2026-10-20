@@ -65,7 +65,7 @@
                     <span class="badge" :class="job.state === 'failed' ? 'bg-danger' : 'bg-secondary'">{{ $t(job.state) }}</span>
                     <button v-if="activeJob(job)" class="btn btn-sm btn-normal ms-auto" @click="cancel(job)">{{ $t("Cancel") }}</button>
                 </div>
-                <small>{{ deviceName(job.endpoint) }}<template v-if="job.kind === 'copy'"> → {{ deviceName(job.destination) }}</template> · {{ bytes(job.bytes) }}</small>
+                <small>{{ deviceName(job.endpoint) }}<template v-if="job.kind === 'copy'"> → {{ deviceName(job.destination) }}</template> · {{ bytes(job.bytes) }}<template v-if="job.total !== undefined"> / {{ bytes(job.total) }}</template></small>
                 <div v-if="activeJob(job)" class="progress mt-1" role="progressbar" :aria-label="$t('Image transfer progress')" :aria-valuenow="jobPercent(job) ?? undefined" aria-valuemin="0" aria-valuemax="100">
                     <div class="progress-bar progress-bar-striped progress-bar-animated" :style="{ width: (jobPercent(job) ?? 100) + '%' }">{{ jobPercent(job) === null ? '' : jobPercent(job) + '%' }}</div>
                 </div>

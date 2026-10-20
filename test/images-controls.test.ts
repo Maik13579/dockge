@@ -178,12 +178,17 @@ test("job snapshots restore active operations and omit completed transfers", () 
     restoreImageJobs(root, [{ id: "copy",
         kind: "copy",
         state: "transferring",
-        bytes: 1024 }, { id: "done",
+        bytes: 1024,
+        total: 4096 }, { id: "done",
         state: "completed" }]);
     assert.deepEqual(Object.keys(root.imageJobs), [ "copy" ]);
     disconnectImages(root);
     assert.equal(root.imageJobs.copy.state, "transferring", "A websocket disconnect must not mark server copies as cancelled");
-    assert.equal(imageJobPercent(root.imageJobs.copy), null, "An unknown archive size uses an indeterminate bar");
+    assert.equal(imageJobPercent(root.imageJobs.copy), 25, "The exact archive total survives refresh");
+    assert.equal(imageJobPercent({ state: "transferring",
+        bytes: 1024 }), null, "Older agents without an archive size still use an indeterminate bar");
+    assert.equal(imageJobPercent({ state: "preparing",
+        bytes: 0 }), null);
     assert.equal(imageJobPercent({ state: "transferring",
         bytes: 25,
         total: 100 }), 25);

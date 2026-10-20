@@ -65,7 +65,7 @@ export class ImageTransfers {
         return ![ "completed", "failed", "cancelled" ].includes(job.info.state)
             && ([ "copy", "pull" ].includes(job.info.kind)
                 || (job.info.kind === "upload" && job.info.state === "loading")
-                || (job.info.kind === "download" && job.info.state === "transferring"));
+                || (job.info.kind === "download" && [ "preparing", "transferring" ].includes(job.info.state)));
     }
 
     hasDetachedJobs(owner: DockgeSocket): boolean {
@@ -278,11 +278,16 @@ export class ImageTransfers {
                         throw new Error("Source image tags changed. Refresh and try again.");
                     }
                     const source = await this.localSource(image.id, tags, signal);
-                    res.type("application/x-tar");
-                    await pipeline(source.stream, res, { signal,
-                        end: false });
-                    await source.done;
-                    res.end();
+                    try {
+                        res.type("application/x-tar");
+                        if (source.size !== undefined) {
+                            res.setHeader("Content-Length", source.size);
+                        }
+                        await pipeline(source.stream, res, { signal });
+                        await source.done;
+                    } finally {
+                        await source.dispose?.();
+                    }
                 });
                 return { ticket };
             }
@@ -357,7 +362,8 @@ export class ImageTransfers {
         return remoteSource(archiveURL(owner.instanceManager.getImageAgent(endpoint).url, result.ticket), signal);
     }
 
-    private async destination(owner: DockgeSocket, endpoint: string, id: string | undefined, signal: AbortSignal, operationId: string): Promise<ImageDestination> {
+    private async destination(owner: DockgeSocket, endpoint: string, id: string | undefined, signal: AbortSignal, operationId: string,
+        progress?: (bytes: number) => void, loading?: () => void): Promise<ImageDestination> {
         if (!endpoint) {
             return loadImage(signal);
         }
@@ -368,7 +374,7 @@ export class ImageTransfers {
             this.call(owner, endpoint, { action: "cancelImport",
                 operationId }).catch(() => {});
         }, { once: true });
-        return remoteDestination(archiveURL(owner.instanceManager.getImageAgent(endpoint).url, result.ticket), signal);
+        return remoteDestination(archiveURL(owner.instanceManager.getImageAgent(endpoint).url, result.ticket), signal, progress, loading);
     }
 
     private newJob(owner: DockgeSocket, request: ImageRequest, kind: ImageJob["kind"], label: string): Job {
@@ -519,14 +525,21 @@ export class ImageTransfers {
             const job = this.newJob(owner, request, "download", label);
             const ticket = this.issue(owner, "GET", async (req, res) => {
                 await this.perform(job, async () => {
-                    this.update(job, { state: "transferring" });
+                    this.update(job, { state: "preparing" });
                     const source = await this.source(owner, request.endpoint, id, image.tags, job.controller.signal);
-                    res.type("application/x-tar");
-                    res.setHeader("Content-Disposition", `attachment; filename="${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120)}.tar"`);
-                    await pipeline(source.stream, byteCounter(bytes => this.update(job, { bytes }, true)), res, { signal: job.controller.signal,
-                        end: false });
-                    await source.done;
-                    res.end();
+                    try {
+                        this.update(job, { state: "transferring",
+                            total: source.size });
+                        res.type("application/x-tar");
+                        if (source.size !== undefined) {
+                            res.setHeader("Content-Length", source.size);
+                        }
+                        res.setHeader("Content-Disposition", `attachment; filename="${label.replace(/[^a-zA-Z0-9._-]/g, "_").slice(0, 120)}.tar"`);
+                        await pipeline(source.stream, byteCounter(bytes => this.update(job, { bytes }, true)), res, { signal: job.controller.signal });
+                        await source.done;
+                    } finally {
+                        await source.dispose?.();
+                    }
                 });
             }, job.controller);
             return { ticket,
@@ -547,14 +560,22 @@ export class ImageTransfers {
         }
         const job = this.newJob(owner, request, "copy", label);
         this.perform(job, async () => {
-            this.update(job, { state: "transferring" });
-            const destination = await this.destination(owner, request.destination!, id, job.controller.signal, job.info.id);
+            this.update(job, { state: "preparing" });
             const source = await this.source(owner, request.endpoint, id, image.tags, job.controller.signal);
-            const counter = byteCounter(bytes => this.update(job, { bytes }, true), () => this.update(job, { state: "loading" }));
-            const message = await transferImage(source, destination, job.controller.signal, counter);
-            await this.call(owner, request.destination!, { action: "inspect",
-                id }, job.controller.signal);
-            return message;
+            try {
+                const progress = (bytes: number) => this.update(job, { bytes }, true);
+                const loading = () => this.update(job, { state: "loading" });
+                const destination = await this.destination(owner, request.destination!, id, job.controller.signal, job.info.id, progress, loading);
+                this.update(job, { state: "transferring",
+                    total: source.size });
+                const counter = byteCounter(request.destination ? () => {} : progress, request.destination ? undefined : loading);
+                const message = await transferImage(source, destination, job.controller.signal, counter);
+                await this.call(owner, request.destination!, { action: "inspect",
+                    id }, job.controller.signal);
+                return message;
+            } finally {
+                await source.dispose?.();
+            }
         }).catch(() => {});
         return { job: job.info };
     }

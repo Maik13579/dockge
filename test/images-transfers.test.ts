@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { test, TestContext } from "node:test";
 import { EventEmitter } from "node:events";
 import http from "node:http";
+import fs from "node:fs/promises";
+import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import express from "express";
 import { Readable } from "node:stream";
 import { ImageTransfers } from "../backend/image-transfers";
-import { archiveURL, byteCounter, remoteDestination, remoteSource, transferImage } from "../backend/image-stream";
+import { archiveURL, byteCounter, remoteDestination, remoteSource, saveImage, transferImage } from "../backend/image-stream";
 import { ImageRouter } from "../backend/routers/image-router";
 import type { DockgeSocket } from "../backend/util-server";
 import type { DockgeServer } from "../backend/dockge-server";
@@ -104,7 +107,37 @@ async function network(t: TestContext) {
         viewer };
 }
 
-test("all copy directions stream archives through main and never delete the source", async t => {
+async function waitFor(condition: () => boolean | Promise<boolean>) {
+    const deadline = Date.now() + 5000;
+    while (!await condition()) {
+        assert.ok(Date.now() < deadline, "Timed out waiting for the archive lifecycle");
+        await delay(5);
+    }
+}
+
+function trackArchives(t: TestContext) {
+    const directories: string[] = [];
+    const create = fs.mkdtemp.bind(fs);
+    t.mock.method(fs, "mkdtemp", async (prefix: string) => {
+        const directory = await create(prefix);
+        directories.push(directory);
+        return directory;
+    });
+    t.after(async () => {
+        for (const directory of directories) {
+            await fs.rm(directory, { recursive: true,
+                force: true });
+        }
+    });
+    return directories;
+}
+
+async function archivesRemoved(directories: string[]) {
+    return (await Promise.all(directories.map(directory => fs.access(directory).then(() => false, () => true)))).every(Boolean);
+}
+
+test("all copy directions transfer prepared archives with exact totals and never delete the source", async t => {
+    const directories = trackArchives(t);
     const payload = Buffer.alloc(1024 * 1024 + 17);
     for (let index = 0; index < payload.length; index++) {
         payload[index] = index % 256;
@@ -136,7 +169,10 @@ test("all copy directions stream archives through main and never delete the sour
         const job = await viewer.result(result.job!.id);
         assert.equal(job.state, "completed", job.message);
         assert.equal(job.bytes, payload.length);
+        assert.equal(job.total, payload.length, "Use the archive bytes, not Docker's reported image size");
     }
+    assert.equal(directories.length, 3, "Only the exporting device creates a temporary archive");
+    await waitFor(() => archivesRemoved(directories));
     assert.equal(calls.filter(call => call.args[1] === "load").length, 3);
     assert.equal(calls.some(call => call.args[1] === "rm"), false);
     for (const call of calls.filter(call => call.args[1] === "save")) {
@@ -485,4 +521,233 @@ test("registry pulls keep their execution context after refresh and can be cance
         endpoint: "",
         jobId: result.job!.id });
     assert.equal((await refreshed.result(result.job!.id)).state, "cancelled");
+});
+
+test("saved archives exist on disk with their exact size and are removed when released", async t => {
+    const directories = trackArchives(t);
+    const payload = Buffer.alloc(1024 * 1024 + 37, 0x9a);
+    mockDocker(t, args => args[1] === "save" ? { output: payload } : defaultDocker(args));
+    const source = await saveImage([ idA ], new AbortController().signal);
+    try {
+        assert.equal(source.size, payload.length);
+        const filename = path.join(directories[0], "image.tar");
+        assert.deepEqual(await fs.readFile(filename), payload);
+        assert.equal((await fs.stat(filename)).mode & 0o777, 0o600);
+        const chunks: Buffer[] = [];
+        for await (const chunk of source.stream) {
+            chunks.push(chunk);
+        }
+        assert.deepEqual(Buffer.concat(chunks), payload);
+    } finally {
+        await source.dispose!();
+    }
+    assert.equal(await archivesRemoved(directories), true);
+});
+
+test("local and agent downloads advertise exact archive sizes and clean up their files", async t => {
+    const directories = trackArchives(t);
+    const payload = Buffer.alloc(1024 * 1024 + 179, 0xab);
+    mockDocker(t, args => args[1] === "save" ? { output: payload } : defaultDocker(args));
+    const { main, viewer } = await network(t);
+    for (const endpoint of [ "", "a" ]) {
+        const updates: ImageJob[] = [];
+        const collect = (job: ImageJob) => updates.push({ ...job });
+        viewer.on("imageJob", collect);
+        const result = await main.transfers.request(viewer.socket(), { action: "download",
+            endpoint,
+            id: idA });
+        const source = await remoteSource(archiveURL(main.url, result.ticket), new AbortController().signal);
+        assert.equal(source.size, payload.length, "The browser receives Content-Length through the main instance");
+        const chunks: Buffer[] = [];
+        for await (const chunk of source.stream) {
+            chunks.push(chunk);
+        }
+        assert.deepEqual(Buffer.concat(chunks), payload);
+        const job = await viewer.result(result.job!.id);
+        assert.equal(job.state, "completed", job.message);
+        assert.equal(job.total, payload.length);
+        assert.equal(job.bytes, payload.length);
+        assert.ok(updates.some(update => update.state === "preparing" && update.bytes === 0 && update.total === undefined));
+        assert.ok(updates.some(update => update.state === "transferring" && update.total === payload.length));
+        viewer.off("imageJob", collect);
+    }
+    assert.equal(directories.length, 2);
+    await waitFor(() => archivesRemoved(directories));
+});
+
+test("interrupted local and agent downloads remove their prepared archives", async t => {
+    const directories = trackArchives(t);
+    mockDocker(t, args => args[1] === "save" ? { output: Buffer.alloc(16 * 1024 * 1024) } : defaultDocker(args));
+    const { main, viewer } = await network(t);
+    for (const endpoint of [ "", "a" ]) {
+        const result = await main.transfers.request(viewer.socket(), { action: "download",
+            endpoint,
+            id: idA });
+        const source = await remoteSource(archiveURL(main.url, result.ticket), new AbortController().signal);
+        source.stream.destroy();
+        assert.equal((await viewer.result(result.job!.id)).state, "cancelled");
+        await waitFor(() => archivesRemoved(directories));
+    }
+    assert.equal(directories.length, 2);
+});
+
+test("copies stay in preparation until save completes and retain their exact total after refresh", async t => {
+    const directories = trackArchives(t);
+    let release: () => void;
+    let started: () => void;
+    const saving = new Promise<void>(resolve => started = resolve);
+    const calls = mockDocker(t, args => {
+        if (args[1] === "save") {
+            started();
+            return new Promise(resolve => release = () => resolve({ output: Buffer.from("prepared archive") }));
+        }
+        return defaultDocker(args);
+    });
+    const { main, viewer } = await network(t);
+    const result = await main.transfers.request(viewer.socket(), { action: "copy",
+        endpoint: "a",
+        destination: "b",
+        id: idA,
+        confirmed: true });
+    await saving;
+    assert.equal(viewer.jobs.get(result.job!.id)?.state, "preparing");
+    assert.equal(calls.some(call => call.args[1] === "load"), false, "Loading must not start before the archive is ready");
+    viewer.connected = false;
+    main.transfers.disconnect(viewer.socket());
+    const refreshed = new Viewer();
+    main.viewers.push(refreshed);
+    const restored = main.transfers.restore(refreshed.socket());
+    assert.equal(restored[0].state, "preparing");
+    assert.equal(restored[0].total, undefined);
+    release!();
+    const job = await refreshed.result(result.job!.id);
+    assert.equal(job.state, "completed", job.message);
+    assert.equal(job.total, Buffer.byteLength("prepared archive"));
+    assert.equal(job.bytes, job.total);
+    await waitFor(() => archivesRemoved(directories));
+});
+
+test("failed exports remove their temporary archives", async t => {
+    const directories = trackArchives(t);
+    mockDocker(t, () => ({ output: "partial archive",
+        error: "export failed",
+        code: 1 }));
+    await assert.rejects(saveImage([ idA ], new AbortController().signal), /export failed/);
+    assert.equal(directories.length, 1);
+    assert.equal(await archivesRemoved(directories), true);
+});
+
+test("cancelling local or agent preparation removes the unfinished archive", async t => {
+    const directories = trackArchives(t);
+    let started: () => void;
+    mockDocker(t, args => {
+        if (args[1] === "save") {
+            started();
+            return new Promise(() => {});
+        }
+        return defaultDocker(args);
+    });
+    const { main, viewer } = await network(t);
+    for (const endpoint of [ "", "a" ]) {
+        const saving = new Promise<void>(resolve => started = resolve);
+        const result = await main.transfers.request(viewer.socket(), { action: "copy",
+            endpoint,
+            destination: "b",
+            id: idA,
+            confirmed: true });
+        await saving;
+        await main.transfers.request(viewer.socket(), { action: "cancel",
+            endpoint: "",
+            jobId: result.job!.id });
+        assert.equal((await viewer.result(result.job!.id)).state, "cancelled");
+        await waitFor(() => archivesRemoved(directories));
+    }
+    assert.equal(directories.length, 2);
+});
+
+test("a failed destination releases the prepared source archive", async t => {
+    const directories = trackArchives(t);
+    mockDocker(t, args => args[1] === "save" ? { output: Buffer.alloc(16 * 1024 * 1024) } : defaultDocker(args));
+    const { main, b, viewer } = await network(t);
+    const original = b.transfers.command.bind(b.transfers);
+    t.mock.method(b.transfers, "command", async (owner, request) => {
+        if (request.action === "import") {
+            throw new Error("destination unavailable");
+        }
+        return original(owner, request);
+    });
+    for (const endpoint of [ "", "a" ]) {
+        const result = await main.transfers.request(viewer.socket(), { action: "copy",
+            endpoint,
+            destination: "b",
+            id: idA,
+            confirmed: true });
+        const job = await viewer.result(result.job!.id);
+        assert.equal(job.state, "failed");
+        assert.match(job.message, /destination unavailable/);
+        await waitFor(() => archivesRemoved(directories));
+    }
+    assert.equal(directories.length, 2);
+});
+
+test("remote copy progress counts acknowledged bytes and enters loading only after the final bytes arrive", async t => {
+    const payload = Buffer.alloc(9 * 1024 * 1024 + 3, 0xbc);
+    let received = 0;
+    let acknowledge: () => void;
+    let release: () => void;
+    let arrived: () => void;
+    let started: () => void;
+    const firstChunk = new Promise<void>(resolve => arrived = resolve);
+    const loading = new Promise<void>(resolve => started = resolve);
+    const controller = new AbortController();
+    const server = http.createServer(async (req, res) => {
+        for await (const chunk of req) {
+            received += chunk.length;
+        }
+        if (received === 8 * 1024 * 1024) {
+            await new Promise<void>(resolve => {
+                acknowledge = resolve;
+                arrived();
+            });
+        }
+        if (req.headers["x-image-final"] === "1") {
+            await new Promise<void>(resolve => {
+                release = resolve;
+                started();
+            });
+            res.end(JSON.stringify({ ok: true,
+                message: "Loaded image" }));
+        } else {
+            res.end(JSON.stringify({ ok: true,
+                ticket: "/next-chunk" }));
+        }
+    });
+    await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+    t.after(async () => {
+        controller.abort();
+        server.closeAllConnections();
+        await new Promise<void>(resolve => server.close(() => resolve()));
+    });
+    const address = server.address() as { port: number };
+    let reported = 0;
+    let loadingStarted = false;
+    const destination = remoteDestination(new URL(`http://127.0.0.1:${address.port}/start`), controller.signal,
+        bytes => {
+            reported = bytes;
+        }, () => {
+            loadingStarted = true;
+            assert.equal(reported, payload.length);
+        });
+    const transfer = transferImage({ stream: Readable.from([ payload ]),
+        done: Promise.resolve() }, destination, controller.signal, byteCounter(() => {}));
+    await firstChunk;
+    assert.equal(reported, 0, "Buffering or sending a block must not count it before acknowledgement");
+    assert.equal(loadingStarted, false);
+    acknowledge!();
+    await loading;
+    assert.equal(loadingStarted, true);
+    assert.equal(received, payload.length);
+    assert.equal(reported, payload.length);
+    release!();
+    await transfer;
 });
