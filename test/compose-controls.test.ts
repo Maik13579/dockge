@@ -1053,3 +1053,76 @@ test("stack group sidebar hides agents without matching groups", () => {
     sidebar.searchText = "missing";
     assert.equal(sidebar.groupAgents.length, 0);
 });
+
+test("failed replicas are highlighted in both container views without hiding running controls", () => {
+    const { instance: card, template } = component("../frontend/src/components/Container.vue");
+    card.$t = (key, values) => key === "Exited with code {code}" ? `Exited with code ${values.code}` : key;
+    card.name = "app";
+    card.serviceStatus = [
+        { name: "app-1",
+            state: "running",
+            health: "healthy" },
+        { name: "app-2",
+            state: "exited",
+            exitCode: 137 },
+    ];
+    for (const compact of [ false, true ]) {
+        card.compact = compact;
+        assert.equal(card.hasErrors, true);
+        assert.equal(card.displayStatus, "Exited with code 137");
+        assert.equal(card.bgStyle, "bg-danger");
+        assert.equal(card.isRunning, true);
+        assert.equal(card.errorDetails, "app-2: Exited with code 137");
+    }
+    assert.match(template, /'service-error': !isEditMode && hasErrors/);
+    assert.equal(containerStatus.containerStatusGroup(card.serviceStatus), 0);
+    card.serviceStatus = [{ name: "app-1",
+        state: "running",
+        health: "unhealthy" }];
+    assert.equal(card.displayStatus, "Unhealthy");
+    assert.equal(card.bgStyle, "bg-danger");
+    card.serviceStatus = [{ state: "restarting" }];
+    assert.equal(card.displayStatus, "Restarting");
+    assert.equal(card.isRunning, true);
+    card.serviceStatus = [{ state: "exited",
+        exitCode: 0 }];
+    assert.equal(card.hasErrors, false);
+    assert.equal(card.bgStyle, "bg-secondary");
+    assert.equal(card.isRunning, false);
+});
+
+test("stack badges display errors separately from the running status and clear on recovery", () => {
+    const { instance: badge } = component("../frontend/src/components/Uptime.vue");
+    badge.stack = { status: util.RUNNING,
+        errorCount: 2 };
+    assert.equal(badge.color, "danger");
+    assert.equal(badge.statusName, "Error");
+    assert.match(badge.errorTitle, /2/);
+    assert.equal(badge.stack.status, util.RUNNING);
+    badge.stack.errorCount = 0;
+    assert.equal(badge.color, "primary");
+    assert.equal(badge.statusName, "active");
+});
+
+test("service poll updates the page and sidebar error counts, including older agents", () => {
+    const { instance: page } = component("../frontend/src/pages/Compose.vue");
+    page.stack = { name: "test" };
+    page.$root.completeStackList.test_ = { status: util.RUNNING };
+    let reply;
+    page.$root.emitAgent = (_endpoint, _event, _name, callback) => reply = callback;
+    page.requestServiceStatus();
+    reply({ ok: true,
+        stackStatus: util.RUNNING,
+        serviceStatusList: { app: [{ state: "running" }, { state: "exited",
+            exitCode: 1 }] } });
+    assert.equal(page.containerErrorCount, 1);
+    assert.equal(page.globalStack.errorCount, 1);
+    assert.equal(page.stack.errorCount, 1);
+    page.requestServiceStatus();
+    reply({ ok: true,
+        stackStatus: util.RUNNING,
+        stackErrorCount: 0,
+        serviceStatusList: { app: [{ state: "running" }] } });
+    assert.equal(page.containerErrorCount, 0);
+    assert.equal(page.globalStack.errorCount, 0);
+});

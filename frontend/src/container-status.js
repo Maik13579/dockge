@@ -1,8 +1,10 @@
+import { containerIssue, countContainerIssues } from "../../common/container-status";
+
+export { containerIssue, countContainerIssues };
+
 /** Group errors/restarts, running containers, exited containers, then inactive services. */
 export function containerStatusGroup(instances = []) {
-    if (instances.some(instance => instance.health === "unhealthy"
-        || [ "error", "dead", "unhealthy", "restarting" ].includes(instance.state || instance.status)
-        || (instance.state === "exited" && typeof instance.exitCode === "number" && instance.exitCode !== 0))) {
+    if (instances.some(instance => containerIssue(instance))) {
         return 0;
     }
     if (instances.some(instance => [ "running", "paused", "healthy", "starting" ].includes(instance.state || instance.status))) {

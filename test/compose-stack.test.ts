@@ -140,8 +140,8 @@ test("Pull and Kill socket actions validate input and execute stack or named-ser
 
 test("a custom Compose project name updates its managed folder instead of creating a duplicate", async (t) => {
     const { server, stackDirectory } = await fixture(t);
-    t.mock.method(childProcessAsync, "spawn", () => Promise.resolve({
-        stdout: JSON.stringify([{
+    t.mock.method(childProcessAsync, "spawn", (_command, args) => Promise.resolve({
+        stdout: args[0] === "ps" ? "" : JSON.stringify([{
             Name: "custom-project",
             Status: "created(20),running(1)",
             ConfigFiles: [ "compose.yaml", "compose.override.yaml" ].map(file => path.join(stackDirectory, file)).join(","),
@@ -416,8 +416,8 @@ test("cached polling clears running status after down and drops vanished externa
             ConfigFiles: "/elsewhere/compose.yaml",
         },
     ];
-    t.mock.method(childProcessAsync, "spawn", () => Promise.resolve({
-        stdout: JSON.stringify(projects),
+    t.mock.method(childProcessAsync, "spawn", (_command, args) => Promise.resolve({
+        stdout: args[0] === "ps" ? "" : JSON.stringify(projects),
     }) as ReturnType<typeof childProcessAsync.spawn>);
 
     let list = await Stack.getStackList(server);
@@ -436,8 +436,8 @@ test("cached polling clears running status after down and drops vanished externa
 
 test("a failed project poll preserves the cached running state", async (t) => {
     const { server, stackDirectory } = await fixture(t);
-    const poll = t.mock.method(childProcessAsync, "spawn", () => Promise.resolve({
-        stdout: JSON.stringify([{
+    const poll = t.mock.method(childProcessAsync, "spawn", (_command, args) => Promise.resolve({
+        stdout: args[0] === "ps" ? "" : JSON.stringify([{
             Name: "test",
             Status: "running(1)",
             ConfigFiles: path.join(stackDirectory, "compose.yaml"),
@@ -449,4 +449,72 @@ test("a failed project poll preserves the cached running state", async (t) => {
     });
     await assert.rejects(Stack.getStackList(server, true), /temporarily unavailable/);
     assert.equal(list.get("test")?.status, RUNNING);
+});
+
+test("stack lists expose failures for unopened custom-named projects and clear them after recovery", async t => {
+    const { server, stackDirectory } = await fixture(t);
+    let rows = [
+        { project: "custom-project",
+            state: "running",
+            health: "healthy",
+            exitCode: 0 },
+        { project: "custom-project",
+            state: "exited",
+            health: "",
+            exitCode: 1 },
+    ];
+    let inspectFailed = false;
+    t.mock.method(childProcessAsync, "spawn", async (_command, args) => {
+        if (args[0] === "ps") {
+            return { stdout: "123456789abc\n23456789abcd" } as Awaited<ReturnType<typeof childProcessAsync.spawn>>;
+        }
+        if (args[0] === "inspect") {
+            if (inspectFailed) {
+                throw new Error("Docker status temporarily unavailable");
+            }
+            return { stdout: rows.map(row => JSON.stringify(row)).join("\n") } as Awaited<ReturnType<typeof childProcessAsync.spawn>>;
+        }
+        return { stdout: JSON.stringify([{ Name: "custom-project",
+            Status: "running(1),exited(1)",
+            ConfigFiles: path.join(stackDirectory, "compose.yaml") }]) } as Awaited<ReturnType<typeof childProcessAsync.spawn>>;
+    });
+    let stack = (await Stack.getStackList(server)).get("test")!;
+    assert.equal(stack.status, RUNNING, "Failure indicators must not change stack control semantics");
+    assert.equal(stack.errorCount, 1);
+    assert.equal(Reflect.get(stack.toSimpleJSON("agent:5001"), "errorCount"), 1);
+    inspectFailed = true;
+    stack = (await Stack.getStackList(server, true)).get("test")!;
+    assert.equal(stack.errorCount, 1, "Failed status reads must not clear known errors");
+    inspectFailed = false;
+    rows = rows.map(row => ({ ...row,
+        state: "running",
+        health: "healthy",
+        exitCode: 0 }));
+    stack = (await Stack.getStackList(server, true)).get("test")!;
+    assert.equal(stack.errorCount, 0);
+});
+
+test("service polling counts failed replicas while keeping running controls and clears errors on down", async t => {
+    const { server } = await fixture(t);
+    const stack = new Stack(server, "test");
+    let rows = [
+        { Service: "app",
+            State: "running",
+            Health: "healthy",
+            Name: "app-1",
+            ExitCode: 0 },
+        { Service: "app",
+            State: "exited",
+            Health: "",
+            Name: "app-2",
+            ExitCode: 137 },
+    ];
+    t.mock.method(childProcessAsync, "spawn", async () => ({ stdout: rows.map(row => JSON.stringify(row)).join("\n") }) as Awaited<ReturnType<typeof childProcessAsync.spawn>>);
+    await stack.getServiceStatusList();
+    assert.equal(stack.status, RUNNING);
+    assert.equal(stack.errorCount, 1);
+    rows = [];
+    await stack.getServiceStatusList();
+    assert.equal(stack.errorCount, 0);
+    assert.equal(stack.status, CREATED_FILE);
 });

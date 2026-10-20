@@ -211,6 +211,11 @@ export default {
                     return 1;
                 }
 
+                // Put stacks with failed containers before healthy stacks.
+                if (!!m1.errorCount !== !!m2.errorCount) {
+                    return m1.errorCount ? -1 : 1;
+                }
+
                 // sort by status
                 if (m1.status !== m2.status) {
                     if (m2.status === RUNNING) {

@@ -542,3 +542,21 @@ for (const action of [ "loadOptions", "requestSnapshot" ]) {
         assert.deepEqual(view[resultKey], [ newest ]);
     });
 }
+
+test("group failures are counted across agents and failed replicas sort above healthy services", () => {
+    const failed = { reference: "Robot:vision",
+        stackName: "vision",
+        config: { services: { camera: {} } },
+        serviceStatusList: { camera: [{ state: "running" }, { state: "exited",
+            exitCode: 1 }] } };
+    const healthy = { reference: "Current:core",
+        stackName: "core",
+        config: { services: { app: {} } },
+        serviceStatusList: { app: [{ state: "running" }] } };
+    const view = { members: [ healthy, failed ] };
+    const count = groupView.computed.containerErrorCount.call(view);
+    assert.equal(count, 1);
+    assert.equal(groupView.computed.rows.call(view)[0].member.reference, failed.reference);
+    assert.equal(groupView.computed.groupState.call({ ...view,
+        containerErrorCount: count }), "Containers need attention");
+});

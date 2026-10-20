@@ -1,11 +1,11 @@
 <template>
-    <div class="shadow-box service-card" :class="compactLayout ? 'compact-container mb-2' : 'big-padding mb-3'">
+    <div class="shadow-box service-card" :class="[compactLayout ? 'compact-container mb-2' : 'big-padding mb-3', { 'service-error': !isEditMode && hasErrors }]">
         <div class="row service-summary">
             <div class="col-5 service-info">
                 <div v-if="groupLabel && !compactLayout" class="group-label small text-secondary mb-1">{{ groupLabel }}</div>
                 <div class="service-identity">
                     <div v-if="compactLayout" class="service-status">
-                        <span class="badge me-1" :class="bgStyle">{{ status }}</span>
+                        <span class="badge me-1" :class="bgStyle" :title="errorDetails">{{ displayStatus }}</span>
                         <span v-if="health" class="badge me-1" :class="health === 'unhealthy' ? 'bg-danger' : 'bg-secondary'">
                             {{ $t("Health") }}: {{ health }}
                         </span>
@@ -22,10 +22,12 @@
                     <span class="me-1">{{ imageName }}:</span><span class="tag">{{ imageTag }}</span>
                 </div>
                 <div v-if="!isEditMode && !compactLayout" class="service-status">
-                    <span class="badge me-1" :class="bgStyle">{{ status }}</span>
+                    <span class="badge me-1" :class="bgStyle" :title="errorDetails">{{ displayStatus }}</span>
                     <span v-if="health" class="badge me-1" :class="health === 'unhealthy' ? 'bg-danger' : 'bg-secondary'">
                         {{ $t("Health") }}: {{ health }}
                     </span>
+
+                    <div v-if="hasErrors" class="small text-danger container-error-details mt-1">{{ errorDetails }}</div>
 
                     <template v-if="!compactLayout">
                         <a v-for="(port, index) in envsubstService.ports" :key="index" :href="parsePort(port).url" target="_blank">
@@ -234,6 +236,7 @@
 </template>
 
 <script>
+import { containerIssue } from "../container-status";
 import { defineComponent } from "vue";
 import { FontAwesomeIcon } from "@fortawesome/vue-fontawesome";
 import { parseDockerPort } from "../../../common/util-common";
@@ -328,7 +331,37 @@ export default defineComponent({
             return list;
         },
 
+        issues() {
+            return (this.serviceStatus || []).filter(instance => containerIssue(instance));
+        },
+
+        hasErrors() {
+            return this.issues.length > 0;
+        },
+
+        issueLabels() {
+            return this.issues.map(instance => {
+                const issue = containerIssue(instance);
+                return issue === "exited" ? this.$t("Exited with code {code}", { code: instance.exitCode })
+                    : this.$t({ restarting: "Restarting",
+                        unhealthy: "Unhealthy",
+                        dead: "Dead",
+                        error: "Error" }[issue]);
+            });
+        },
+
+        displayStatus() {
+            return this.hasErrors ? this.issueLabels[0] : this.status;
+        },
+
+        errorDetails() {
+            return this.issues.map((instance, index) => `${instance.name || this.name}: ${this.issueLabels[index]}`).join("; ");
+        },
+
         bgStyle() {
+            if (this.hasErrors) {
+                return "bg-danger";
+            }
             if (this.status === "running" || this.status === "healthy") {
                 return "bg-primary";
             } else if (this.status === "unhealthy") {
@@ -521,6 +554,17 @@ export default defineComponent({
 .service-card {
     width: 100%;
     min-width: 0;
+
+    &.service-error {
+        outline: 2px solid var(--bs-danger);
+        outline-offset: -2px;
+        border-left: 4px solid var(--bs-danger);
+        background-image: linear-gradient(rgba(220, 53, 69, 0.10), rgba(220, 53, 69, 0.10));
+    }
+
+    .container-error-details {
+        overflow-wrap: anywhere;
+    }
 
     .service-summary {
         row-gap: 0.75rem;

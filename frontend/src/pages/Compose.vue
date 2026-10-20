@@ -3,7 +3,7 @@
         <div>
             <h1 v-if="isAdd" class="mb-3">{{ $t("compose") }}</h1>
             <h1 v-else class="mb-3">
-                <Uptime :stack="globalStack" :pill="true" /> {{ stack.name }}
+                <Uptime :stack="globalStack || stack" :pill="true" /> {{ stack.name }}
                 <span v-if="$root.agentCount > 1 && endpoint !== ''" class="agent-name">
                     ({{ endpointDisplay }})
                 </span>
@@ -124,6 +124,9 @@
                     </div>
                     <div v-if="!showComposeFiles && resolvingConfig" class="mb-3 text-secondary" role="status">{{ $t("Resolving Compose configuration...") }}</div>
                     <div v-if="!showComposeFiles && configError" class="mb-3 text-warning" role="alert">{{ $t("Compose configuration could not be resolved") }}: {{ configError }}</div>
+                    <div v-if="!isEditMode && containerErrorCount" class="alert alert-danger" role="status">
+                        {{ $t("Containers need attention") }}: {{ containerErrorCount }}
+                    </div>
                     <div v-if="serviceStatusError" class="text-warning mb-3" role="status">
                         {{ $t("Unable to refresh container status") }}: {{ serviceStatusError }}
                     </div>
@@ -279,7 +282,7 @@
 
 <script>
 import CodeMirror from "vue-codemirror6";
-import { containerStatusGroup } from "../container-status";
+import { containerStatusGroup, countContainerIssues } from "../container-status";
 import { yaml } from "@codemirror/lang-yaml";
 import { python } from "@codemirror/lang-python";
 import { dracula as editorTheme } from "thememirror";
@@ -404,6 +407,10 @@ export default {
     computed: {
         stackBusy() {
             return this.processing || Object.keys(this.serviceOperations).length > 0;
+        },
+
+        containerErrorCount() {
+            return countContainerIssues(Object.values(this.serviceStatusList).flat());
         },
 
         sortedServiceNames() {
@@ -696,6 +703,11 @@ export default {
                 this.serviceStatusError = res.ok ? "" : res.msg;
                 if (res.ok) {
                     this.serviceStatusList = res.serviceStatusList;
+                    const errorCount = res.stackErrorCount ?? countContainerIssues(Object.values(res.serviceStatusList).flat());
+                    this.stack.errorCount = errorCount;
+                    if (this.globalStack) {
+                        this.globalStack.errorCount = errorCount;
+                    }
                     if (res.stackStatus !== undefined) {
                         this.stack.status = res.stackStatus;
                         if (this.globalStack) {

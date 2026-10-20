@@ -295,6 +295,7 @@ export class DockerSocketHandler extends AgentSocketHandler {
                     ok: true,
                     serviceStatusList,
                     stackStatus: stack.status,
+                    stackErrorCount: stack.errorCount,
                 }, callback);
             } catch (e) {
                 callbackError(e, callback);

@@ -1,6 +1,6 @@
 <template>
     <div>
-        <h1 class="mb-3">{{ isAdd ? $t("Add stack group") : name }} <small class="group-owner">{{ $root.endpointDisplayFunction(owner) }}</small></h1>
+        <h1 class="mb-3"><span v-if="containerErrorCount" class="badge bg-danger me-2">{{ $t("Error") }}</span>{{ isAdd ? $t("Add stack group") : name }} <small class="group-owner">{{ $root.endpointDisplayFunction(owner) }}</small></h1>
         <div v-if="error" class="alert alert-warning" role="alert">{{ error }}</div>
         <div class="mb-3">
             <div class="btn-group me-2" role="group">
@@ -85,6 +85,9 @@
         </div>
         <template v-else>
             <p role="status">{{ $t(groupState) }} · {{ members.length }} {{ $t("Stacks") }} · {{ rows.length }} {{ $t("containers") }}</p>
+            <div v-if="containerErrorCount" class="alert alert-danger" role="status">
+                {{ $t("Containers need attention") }}: {{ containerErrorCount }}
+            </div>
             <div v-if="loading" role="status">{{ $t("Loading…") }}</div>
             <div v-for="member in members.filter(member => member.error || member.configError)" :key="member.reference" class="text-warning mb-2">{{ member.agentName }} / {{ member.stackName }}: {{ member.error || member.configError }}</div>
             <div v-if="results.length" class="shadow-box mb-3">

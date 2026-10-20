@@ -1,5 +1,5 @@
 <template>
-    <router-link :to="url" :class="{ 'dim' : !stack.isManagedByDockge }" class="item">
+    <router-link :to="url" :class="{ 'dim' : !stack.isManagedByDockge, 'has-container-errors': stack.errorCount > 0 }" class="item">
         <Uptime :stack="stack" :fixed-width="true" class="me-2" />
         <div class="title" :title="stackName">
             <span>{{ stackName }}</span>
@@ -137,6 +137,10 @@ export default {
     transition: all ease-in-out 0.15s;
     width: 100%;
     padding: 5px 8px;
+    &.has-container-errors {
+        box-shadow: inset 3px 0 var(--bs-danger);
+        background-color: rgba(220, 53, 69, 0.12);
+    }
     &.disabled {
         opacity: 0.3;
     }

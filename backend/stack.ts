@@ -21,11 +21,14 @@ import childProcessAsync from "promisify-child-process";
 import { Settings } from "./settings";
 import { resolveComposeConfig } from "./compose-config";
 import { composeStatus } from "./compose-status";
+import { countContainerIssues } from "../common/container-status";
+import { getProjectErrorCounts } from "./container-errors";
 
 export class Stack {
 
     name: string;
     protected _status: number = UNKNOWN;
+    protected _errorCount = 0;
     protected _composeYAML?: string;
     protected _composeENV?: string;
     protected _composeOverrideYAML?: string;
@@ -96,6 +99,7 @@ export class Stack {
         return {
             name: this.name,
             status: this._status,
+            errorCount: this._errorCount,
             tags: [],
             isManagedByDockge: this.isManagedByDockge,
             composeFileName: this._composeFileName,
@@ -123,6 +127,10 @@ export class Stack {
 
     get status() : number {
         return this._status;
+    }
+
+    get errorCount(): number {
+        return this._errorCount;
     }
 
     validate() {
@@ -356,10 +364,19 @@ export class Stack {
         });
 
         const composeList = res.stdout ? JSON.parse(res.stdout.toString()) : [];
+        let errors: Map<string, number> | undefined;
+        try {
+            errors = await getProjectErrorCounts();
+        } catch (error) {
+            log.warn("getStackList", `Could not refresh container errors: ${error instanceof Error ? error.message : String(error)}`);
+        }
         // Only clear cached status after a successful poll, so a temporary
         // Docker failure does not make running stacks appear inactive.
         for (const stack of stackList.values()) {
             stack._status = CREATED_FILE;
+            if (errors) {
+                stack._errorCount = 0;
+            }
         }
 
         for (let composeStack of composeList) {
@@ -380,6 +397,9 @@ export class Stack {
             }
 
             stack._status = this.statusConvert(composeStack.Status);
+            if (errors) {
+                stack._errorCount = errors.get(composeStack.Name) || 0;
+            }
             stack._configFilePath = composeStack.ConfigFiles;
         }
 
@@ -625,6 +645,7 @@ export class Stack {
             const output = res.stdout?.toString().trim();
             if (!output) {
                 this._status = CREATED_FILE;
+                this._errorCount = 0;
                 return statusList;
             }
 
@@ -657,6 +678,7 @@ export class Stack {
             }
 
             this._status = states.length ? composeStatus(states.join(",")) : CREATED_FILE;
+            this._errorCount = countContainerIssues([ ...statusList.values() ].flat());
             return statusList;
         } catch (e) {
             log.error("getServiceStatusList", e);

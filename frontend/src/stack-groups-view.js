@@ -1,5 +1,5 @@
 import { stackGroupEndpoint } from "../../common/stack-groups";
-import { containerStatusGroup } from "./container-status";
+import { containerStatusGroup, countContainerIssues } from "./container-status";
 import { getCombinedTerminalName, getComposeTerminalName } from "../../common/util-common";
 
 let nextRequestId = 0;
@@ -68,12 +68,18 @@ export default {
             const available = new Set(this.choices.flatMap(choice => choice.stacks.map(stack => stack.reference)));
             return this.selected.filter(reference => !available.has(reference));
         },
+        containerErrorCount() {
+            return this.members.reduce((count, member) => count + countContainerIssues(Object.values(member.serviceStatusList || {}).flat()), 0);
+        },
         groupState() {
             if (!this.members.length) {
                 return "No stacks selected";
             }
             if (this.members.some(member => member.error)) {
                 return "Members unavailable";
+            }
+            if (this.containerErrorCount) {
+                return "Containers need attention";
             }
             const running = this.members.filter(member => Object.values(member.serviceStatusList || {}).some(instances => instances.some(instance => [ "running", "restarting", "paused" ].includes(instance.state))));
             return running.length === this.members.length ? "Running" : running.length ? "Partially running" : "Stopped";

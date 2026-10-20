@@ -16,6 +16,8 @@ Monitoring:
 
 An explicit endpoint is also supported, for example `192.168.1.20:5001:perception`. Duplicate friendly names are rejected; use the endpoint to distinguish them. Update the references if an owning agent's friendly names change. A physical stack cannot appear twice in the same group.
 
+Failed exits, restarting, dead and unhealthy containers sort first and have a red border, tinted background and a reason badge in both Cards and Compact views. Stack badges show Error when any container needs attention, including a failed replica alongside a running replica. Successful jobs (exit code 0) are not flagged. Stack groups show an error summary across their members.
+
 The group view combines the member containers and their CPU/memory statistics, with Cards/Compact views and individual Up, Stop, Kill, Restart, Pull, Exec and Logs controls. The terminal selector switches between member stack logs and command output. Group controls execute across members concurrently and report a result for each stack. Stop runs Compose stop; Down runs Compose down. Unavailable members do not prevent commands on available members.
 
 Edit changes group membership rather than Compose files. Deleting a group leaves its stacks and containers intact. External edits to `groups.yaml` appear in the sidebar on the usual refresh; use Refresh in the group view to reload resolved Compose configurations.
