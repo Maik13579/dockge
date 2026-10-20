@@ -99,7 +99,7 @@
             </div>
             <Container
                 v-for="row in rows" :key="row.key"
-                :name="row.name" :group-label="`${row.member.agentName}/${row.member.stackName}`" :context="containerContext(row)" :compact="compactView" :service-status="row.member.serviceStatusList?.[row.name]" :docker-stats="row.member.dockerStats || {}"
+                :name="row.name" :group-label="`${row.member.agentName} / ${row.member.stackName}`" :context="containerContext(row)" :compact="compactView" :service-status="row.member.serviceStatusList?.[row.name]" :docker-stats="row.member.dockerStats || {}"
                 @start-service="runServiceOperation('startService', row)" @stop-service="runServiceOperation('stopService', row)"
                 @kill-service="runServiceOperation('killService', row)" @restart-service="runServiceOperation('restartService', row)" @pull-service="runServiceOperation('pullService', row)"
             />

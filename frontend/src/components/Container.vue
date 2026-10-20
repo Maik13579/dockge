@@ -312,7 +312,7 @@ export default defineComponent({
         },
 
         displayName() {
-            return this.compactLayout && this.groupLabel ? `${this.groupLabel}/${this.name}` : this.name;
+            return this.compactLayout && this.groupLabel ? `${this.name} (${this.groupLabel})` : this.name;
         },
 
         compactStats() {
