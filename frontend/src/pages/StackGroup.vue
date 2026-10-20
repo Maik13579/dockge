@@ -2,24 +2,59 @@
     <div>
         <h1 class="mb-3">{{ isAdd ? $t("Add stack group") : name }} <small class="group-owner">{{ $root.endpointDisplayFunction(owner) }}</small></h1>
         <div v-if="error" class="alert alert-warning" role="alert">{{ error }}</div>
-        <div class="d-flex flex-wrap gap-2 mb-3">
-            <template v-if="editing">
-                <button class="btn btn-primary" :disabled="saving || !name.trim()" @click="save">{{ $t("Save group") }}</button>
-                <button class="btn btn-normal" :disabled="saving" @click="discard">{{ $t("discardStack") }}</button>
-            </template>
+        <div class="mb-3">
+            <div class="btn-group me-2" role="group">
+                <button v-if="editing" class="btn btn-normal" :disabled="saving || !name.trim()" :title="$t('Save group')" @click="save">
+                    <font-awesome-icon icon="save" class="me-1" />
+                    {{ $t("saveStackDraft") }}
+                </button>
+                <template v-else>
+                    <button class="btn btn-secondary" :disabled="processing" :title="$t('Edit group')" @click="edit">
+                        <font-awesome-icon icon="pen" class="me-1" />
+                        {{ $t("editStack") }}
+                    </button>
+                    <button class="btn btn-primary" :disabled="processing || !members.length" @click="runGroupOperation('startStack')">
+                        <font-awesome-icon icon="play" class="me-1" />
+                        {{ $t("Up") }}
+                    </button>
+                    <button class="btn btn-normal" :disabled="processing || !members.length" @click="runGroupOperation('restartStack')">
+                        <font-awesome-icon icon="rotate" class="me-1" />
+                        {{ $t("restartStack") }}
+                    </button>
+                    <button class="btn btn-normal" :disabled="processing || !members.length" @click="runGroupOperation('pullStack')">
+                        <font-awesome-icon icon="cloud-arrow-down" class="me-1" />
+                        {{ $t("Pull") }}
+                    </button>
+                    <button class="btn btn-normal" :disabled="stopping || !members.length" @click="runGroupOperation('stopStack')">
+                        <font-awesome-icon icon="stop" class="me-1" />
+                        {{ $t("stopStack") }}
+                    </button>
+                    <BDropdown right text="" variant="normal">
+                        <BDropdownItem :disabled="stopping" @click="runGroupOperation('stopStack')">
+                            <font-awesome-icon icon="stop" class="me-1" />
+                            {{ $t("stopStack") }}
+                        </BDropdownItem>
+                        <BDropdownItem :disabled="stopping" @click="runGroupOperation('downStack')">
+                            <font-awesome-icon icon="stop" class="me-1" />
+                            {{ $t("Down") }}
+                        </BDropdownItem>
+                        <BDropdownItem :disabled="stopping" @click="runGroupOperation('killStack')">
+                            <font-awesome-icon icon="times-circle" class="me-1" />
+                            {{ $t("Kill") }}
+                        </BDropdownItem>
+                    </BDropdown>
+                </template>
+            </div>
+            <button v-if="editing" class="btn btn-normal" :disabled="saving" @click="discard">{{ $t("discardStack") }}</button>
             <template v-else>
-                <button class="btn btn-secondary" :disabled="processing" @click="edit">{{ $t("Edit group") }}</button>
-                <button class="btn btn-primary" :disabled="processing || !members.length" @click="runGroupOperation('startStack')">{{ $t("Up") }}</button>
-                <button class="btn btn-normal" :disabled="processing || !members.length" @click="runGroupOperation('restartStack')">{{ $t("restartStack") }}</button>
-                <button class="btn btn-normal" :disabled="processing || !members.length" @click="runGroupOperation('pullStack')">{{ $t("Pull") }}</button>
-                <button class="btn btn-normal" :disabled="stopping || !members.length" @click="runGroupOperation('stopStack')">{{ $t("stopStack") }}</button>
-                <BDropdown right text="" variant="normal">
-                    <BDropdownItem :disabled="stopping" @click="runGroupOperation('stopStack')">{{ $t("stopStack") }}</BDropdownItem>
-                    <BDropdownItem :disabled="stopping" @click="runGroupOperation('downStack')">{{ $t("Down") }}</BDropdownItem>
-                    <BDropdownItem :disabled="stopping" @click="runGroupOperation('killStack')">{{ $t("Kill") }}</BDropdownItem>
-                </BDropdown>
-                <button class="btn btn-normal" @click="refresh">{{ $t("Refresh") }}</button>
-                <button class="btn btn-danger" :disabled="processing" @click="remove">{{ $t("Delete group") }}</button>
+                <button class="btn btn-danger" :disabled="processing" :title="$t('Delete group')" @click="remove">
+                    <font-awesome-icon icon="trash" class="me-1" />
+                    {{ $t("deleteStack") }}
+                </button>
+                <button class="btn btn-normal ms-2" @click="refresh">
+                    <font-awesome-icon icon="arrows-rotate" class="me-1" />
+                    {{ $t("Refresh") }}
+                </button>
             </template>
         </div>
         <div v-if="editing" class="shadow-box big-padding">
