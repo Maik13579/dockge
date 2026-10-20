@@ -367,3 +367,178 @@ test("membership options come from the owner's agent registry", async t => {
     assert.equal(result.choices[1].stacks[0].reference, "Owner robot:core");
     assert.equal(result.choices[1].endpoint, "device:5001");
 });
+
+for (const action of [ "options", "snapshot" ]) {
+    test(`${action} sends healthy agent results before an unavailable agent finishes`, async t => {
+        const { groups, request, socket } = await controller(t);
+        await groups.save("Robot", [ "Current:core", "Owner robot:core" ]);
+        let release!: () => void;
+        const blocked = new Promise<void>(resolve => {
+            release = resolve;
+        });
+        t.after(release);
+        let notify!: (update: LooseObject) => void;
+        const firstUpdate = new Promise<LooseObject>(resolve => {
+            notify = resolve;
+        });
+        const emit = socket.emitAgent.bind(socket);
+        t.mock.method(socket, "emitAgent", (event, update: LooseObject) => {
+            emit(event, update);
+            if (event === "stackGroupProgress") {
+                notify(update);
+            }
+        });
+        t.mock.method(StackGroupTransport.prototype, "call", async (_name, member, _agents, event) => {
+            if (member.endpoint) {
+                await blocked;
+                throw new Error("Agent unavailable");
+            }
+            return { ok: true,
+                stacks: [ "core" ],
+                stack: { name: "core" },
+                config: { services: { app: {} } },
+                serviceStatusList: {},
+                dockerStats: {} };
+        });
+        let finished = false;
+        const pending = request({ action,
+            name: "Robot",
+            requestId: "refresh-1" }).then(result => {
+            finished = true;
+            return result;
+        });
+        const update = await firstUpdate;
+        assert.equal(update.requestId, "refresh-1");
+        assert.equal(finished, false, "An unavailable agent must not hold back healthy agent updates");
+        if (action === "options") {
+            assert.equal(update.choice.stacks[0].reference, "Current:core");
+        } else {
+            assert.deepEqual(Object.keys(update.member.config.services), [ "app" ]);
+        }
+        release();
+        const result = await pending;
+        const entries = result.choices || result.members;
+        assert.equal(entries.length, 2);
+        assert.match(entries[1].error, /unavailable/);
+        assert.equal(socket.output.filter(([ event ]) => event === "stackGroupProgress").length, 2);
+    });
+}
+
+function refreshingView(t: TestContext) {
+    const original = globalThis.localStorage;
+    globalThis.localStorage = {} as Storage;
+    const socket = new EventEmitter();
+    const calls: { payload: LooseObject; reply: (result: LooseObject) => void }[] = [];
+    const view = { ...groupView.data.call({ $route: { params: { groupName: "Robot",
+        endpoint: "owner:5001" } } }),
+    isAdd: false,
+    $t: text => text,
+    $root: { getSocket: () => socket,
+        socketIO: { connected: true },
+        agentStatusList: {},
+        emitAgent: (_owner, _event, payload, reply) => calls.push({ payload,
+            reply }) } };
+    for (const [ name, method ] of Object.entries(groupView.methods)) {
+        view[name] = method.bind(view);
+    }
+    t.after(() => {
+        view.disposed = true;
+        socket.emit("disconnect");
+        clearTimeout(view.snapshotTimer);
+        globalThis.localStorage = original;
+    });
+    const progress = (index: number, update: LooseObject, endpoint = "owner:5001") => socket.emit("agent", "stackGroupProgress", { ...update,
+        requestId: calls[index].payload.requestId,
+        endpoint });
+    return { view,
+        calls,
+        socket,
+        progress };
+}
+
+test("membership refresh keeps known stacks visible and appends agents as they respond", async t => {
+    const { view, calls, socket, progress } = refreshingView(t);
+    const known = { endpoint: "",
+        agentName: "Current",
+        stacks: [{ reference: "Current:core",
+            name: "core" }] };
+    const remote = { endpoint: "device:5001",
+        agentName: "Robot",
+        stacks: [{ reference: "Robot:vision",
+            name: "vision" }] };
+    view.choices = [ known ];
+    view.selected = [ "Current:core" ];
+    const pending = view.loadOptions();
+    assert.deepEqual(view.choices, [ known ]);
+    progress(0, { choice: remote }, "other-owner:5001");
+    assert.equal(view.choices.length, 1, "Ignore another owner's events");
+    progress(0, { choice: remote });
+    assert.deepEqual(view.choices, [ known, remote ], "Show a new agent before all replies arrive");
+    const failed = { ...known,
+        stacks: [],
+        error: "Agent unavailable" };
+    progress(0, { choice: failed });
+    assert.deepEqual(view.choices[0].stacks, known.stacks);
+    calls[0].reply({ ok: true,
+        choices: [ failed, remote ] });
+    await pending;
+    assert.deepEqual(view.choices[0].stacks, known.stacks);
+    assert.deepEqual(view.selected, [ "Current:core" ]);
+    assert.equal(socket.listenerCount("agent"), 0);
+});
+
+test("container refresh merges live members immediately and preserves unavailable containers", async t => {
+    const { view, calls, socket, progress } = refreshingView(t);
+    const known = { reference: "Current:core",
+        stackName: "core",
+        stack: { name: "core" },
+        config: { services: { app: {} } },
+        serviceStatusList: { app: [{ state: "running" }] } };
+    const remote = { reference: "Robot:vision",
+        stackName: "vision",
+        stack: { name: "vision" },
+        config: { services: { camera: {} } },
+        serviceStatusList: { camera: [{ state: "running" }] } };
+    view.members = [ known ];
+    const pending = view.requestSnapshot(true);
+    assert.deepEqual(view.members, [ known ]);
+    progress(0, { member: remote });
+    assert.deepEqual(view.members, [ known, remote ]);
+    assert.equal(view.terminalMember, known.reference);
+    const failed = { reference: known.reference,
+        error: "Agent unavailable" };
+    progress(0, { member: failed });
+    assert.deepEqual(view.members[0].config, known.config);
+    assert.equal(view.containerContext({ name: "app",
+        member: view.members[0] }).processing, true, "Cached offline containers cannot be controlled");
+    calls[0].reply({ ok: true,
+        members: [ failed, remote ] });
+    await pending;
+    assert.deepEqual(view.members[0].config, known.config);
+    assert.equal(socket.listenerCount("agent"), 0);
+});
+
+for (const action of [ "loadOptions", "requestSnapshot" ]) {
+    test(`${action} ignores stale refresh events and completion`, async t => {
+        const { view, calls, progress } = refreshingView(t);
+        const first = view[action]();
+        const second = view[action]();
+        const newest = action === "loadOptions" ? { endpoint: "device:5001",
+            stacks: [{ name: "new" }] } : { reference: "Robot:new",
+            stack: { name: "new" } };
+        const stale = action === "loadOptions" ? { endpoint: "device:5001",
+            stacks: [{ name: "old" }] } : { reference: "Robot:old",
+            stack: { name: "old" } };
+        const updateKey = action === "loadOptions" ? "choice" : "member";
+        const resultKey = action === "loadOptions" ? "choices" : "members";
+        progress(1, { [updateKey]: newest });
+        progress(0, { [updateKey]: stale });
+        calls[1].reply({ ok: true,
+            [resultKey]: [ newest ] });
+        await second;
+        calls[0].reply({ ok: true,
+            [resultKey]: [ stale ] });
+        await first;
+        assert.deepEqual(view[resultKey], [ newest ]);
+    });
+}

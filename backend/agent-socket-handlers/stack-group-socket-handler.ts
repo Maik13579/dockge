@@ -61,7 +61,13 @@ export class StackGroupSocketHandler extends AgentSocketHandler {
                 if (!input || typeof input !== "object" || typeof (input as { action?: unknown }).action !== "string") {
                     throw new Error("Invalid stack group request");
                 }
-                const request = input as { action: string; name: string; original?: string; members?: string[]; member?: string; event?: string; args?: unknown[]; refresh?: boolean };
+                const request = input as { action: string; name: string; original?: string; members?: string[]; member?: string; event?: string; args?: unknown[]; refresh?: boolean; requestId?: string };
+                const progress = (update: LooseObject) => {
+                    if (typeof request.requestId === "string" && request.requestId.length <= 100 && socket.connected && socket.userID) {
+                        socket.emitAgent("stackGroupProgress", { requestId: request.requestId,
+                            ...update });
+                    }
+                };
                 if (request.action === "list") {
                     reply({ ok: true,
                         groups: await server.stackGroups.list() });
@@ -95,18 +101,21 @@ export class StackGroupSocketHandler extends AgentSocketHandler {
                             agentName: label,
                             endpoint: device.endpoint,
                             stackName: "catalog" };
+                        let choice;
                         try {
                             const result = await transport.call("", member, agents, "stackGroupCatalog");
-                            return { agentName: device.name || device.endpoint,
+                            choice = { agentName: device.name || device.endpoint,
                                 endpoint: device.endpoint,
                                 stacks: result.stacks.map((name: string) => ({ reference: `${label}:${name}`,
                                     name })) };
                         } catch (error) {
-                            return { agentName: device.name || device.endpoint,
+                            choice = { agentName: device.name || device.endpoint,
                                 endpoint: device.endpoint,
                                 stacks: [],
                                 error: String(error instanceof Error ? error.message : error) };
                         }
+                        progress({ choice });
+                        return choice;
                     }));
                     reply({ ok: true,
                         choices });
@@ -137,6 +146,7 @@ export class StackGroupSocketHandler extends AgentSocketHandler {
                     if (request.action === "snapshot") {
                         const statistics = new Map<string, Promise<LooseObject>>();
                         const snapshots = await Promise.all(members.map(async member => {
+                            let snapshot;
                             try {
                                 if (member.error) {
                                     throw new Error(member.error);
@@ -152,16 +162,18 @@ export class StackGroupSocketHandler extends AgentSocketHandler {
                                     statistics.set(member.endpoint, transport.call(request.name, member, agents, "dockerStats").catch(() => ({ dockerStats: {} })));
                                 }
                                 const stats = await statistics.get(member.endpoint)!;
-                                return { ...member,
+                                snapshot = { ...member,
                                     stack: result.stack,
                                     config: result.config || configs.get(key),
                                     configError: result.configError,
                                     serviceStatusList: result.serviceStatusList,
                                     dockerStats: stats.dockerStats };
                             } catch (error) {
-                                return { ...member,
+                                snapshot = { ...member,
                                     error: error instanceof Error ? error.message : String(error) };
                             }
+                            progress({ member: snapshot });
+                            return snapshot;
                         }));
                         reply({ ok: true,
                             name: request.name,

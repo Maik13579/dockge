@@ -20,4 +20,6 @@ The group view combines the member containers and their CPU/memory statistics, w
 
 Edit changes group membership rather than Compose files. Deleting a group leaves its stacks and containers intact. External edits to `groups.yaml` appear in the sidebar on the usual refresh; use Refresh in the group view to reload resolved Compose configurations.
 
+The group view and membership picker keep known stacks visible while refreshing agents in the background, adding results as each agent responds. Unavailable agents retain their last known containers or selectable stacks and show a warning. Agents without matching groups are hidden in the group sidebar.
+
 Deploy the updated Dockge image on the viewing instance, the group owner, and member agents. Stack groups use the existing Dockge port and authentication; no extra service or port is needed.

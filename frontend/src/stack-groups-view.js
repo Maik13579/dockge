@@ -2,6 +2,8 @@ import { stackGroupEndpoint } from "../../common/stack-groups";
 import { containerStatusGroup } from "./container-status";
 import { getCombinedTerminalName, getComposeTerminalName } from "../../common/util-common";
 
+let nextRequestId = 0;
+
 export default {
     data() {
         return {
@@ -13,6 +15,7 @@ export default {
             choiceSearch: "",
             error: "",
             optionsError: "",
+            optionsRequest: 0,
             editing: !this.$route.params.groupName,
             loading: false,
             saving: false,
@@ -80,6 +83,7 @@ export default {
         owner() {
             if (this.isAdd) {
                 this.selected = [];
+                this.choices = [];
                 this.loadOptions();
             }
         },
@@ -109,9 +113,10 @@ export default {
         next(!this.editing || !this.dirty || window.confirm(this.$t("confirmLeaveStack")));
     },
     methods: {
-        request(payload, timeout = 50000) {
+        request(payload, timeout = 50000, onProgress) {
             const owner = this.owner;
             const socket = this.$root.getSocket();
+            const requestId = `${Date.now()}-${++nextRequestId}`;
             if (!this.$root.socketIO.connected || (owner && this.$root.agentStatusList[owner] === "offline")) {
                 return Promise.reject(new Error(this.$t("Selected device is offline")));
             }
@@ -121,6 +126,7 @@ export default {
                     clearTimeout(timer);
                     socket.off("disconnect", disconnected);
                     socket.off("agentStatus", agentStatus);
+                    socket.off("agent", progress);
                 };
                 const fail = (error) => {
                     if (settled) {
@@ -136,10 +142,19 @@ export default {
                         fail(new Error(this.$t("Selected device is offline")));
                     }
                 };
+                const progress = (event, update) => {
+                    if (!settled && event === "stackGroupProgress" && update?.requestId === requestId && (update.endpoint || "") === owner) {
+                        onProgress?.(update);
+                    }
+                };
                 const timer = timeout ? setTimeout(() => fail(new Error(this.$t("Stack group request timed out"))), timeout) : null;
                 socket.on("disconnect", disconnected);
                 socket.on("agentStatus", agentStatus);
-                this.$root.emitAgent(owner, "stackGroupRequest", payload, result => {
+                if (onProgress) {
+                    socket.on("agent", progress);
+                }
+                this.$root.emitAgent(owner, "stackGroupRequest", { ...payload,
+                    ...(onProgress ? { requestId } : {}) }, result => {
                     if (settled) {
                         return;
                     }
@@ -179,7 +194,8 @@ export default {
                 if (this.disposed) {
                     return;
                 }
-                this.members = result.members;
+                this.updateMembers(result.members.map(member => ({ ...this.members.find(previous => previous.reference === member.reference),
+                    ...member })), true);
                 this.selected = result.members.map(member => member.reference);
                 this.originalMembers = [ ...this.selected ];
                 this.originalName = this.name;
@@ -196,6 +212,19 @@ export default {
         refresh() {
             this.requestSnapshot(true);
         },
+        updateMembers(members, replace = false) {
+            const previous = new Map(this.members.map(member => [ member.reference, member ]));
+            const updated = members.map(member => member.error ? { ...previous.get(member.reference),
+                ...member } : member);
+            const combined = replace ? new Map() : previous;
+            for (const member of updated) {
+                combined.set(member.reference, member);
+            }
+            this.members = [ ...combined.values() ];
+            if (!this.members.some(member => member.reference === this.terminalMember && member.stack)) {
+                this.terminalMember = this.members.find(member => member.stack)?.reference || "";
+            }
+        },
         async requestSnapshot(refresh = false) {
             clearTimeout(this.snapshotTimer);
             if (this.disposed || this.isAdd) {
@@ -205,18 +234,19 @@ export default {
             try {
                 const result = await this.request({ action: "snapshot",
                     name: this.originalName || this.name,
-                    refresh });
+                    refresh }, 50000, update => {
+                    if (request === this.snapshotRequest && !this.disposed && update.member) {
+                        this.updateMembers([ update.member ]);
+                        this.error = "";
+                    }
+                });
                 if (request !== this.snapshotRequest || this.disposed) {
                     return;
                 }
                 if (!result.ok) {
                     throw new Error(result.msg);
                 }
-                this.members = result.members.map(member => member.error ? { ...this.members.find(previous => previous.reference === member.reference),
-                    ...member } : member);
-                if (!this.members.some(member => member.reference === this.terminalMember && member.stack)) {
-                    this.terminalMember = this.members.find(member => member.stack)?.reference || "";
-                }
+                this.updateMembers(result.members, true);
                 this.error = "";
             } catch (error) {
                 if (request === this.snapshotRequest && !this.disposed) {
@@ -230,18 +260,32 @@ export default {
         },
         async loadOptions() {
             const owner = this.owner;
+            const request = ++this.optionsRequest;
+            const mergeChoice = choice => choice.error ? { ...choice,
+                stacks: this.choices.find(previous => previous.endpoint === choice.endpoint)?.stacks || [] } : choice;
             this.optionsError = "";
             try {
-                const result = await this.request({ action: "options" });
-                if (owner !== this.owner || this.disposed) {
+                const result = await this.request({ action: "options" }, 50000, update => {
+                    if (request !== this.optionsRequest || owner !== this.owner || this.disposed || !update.choice) {
+                        return;
+                    }
+                    const choice = mergeChoice(update.choice);
+                    const index = this.choices.findIndex(previous => previous.endpoint === choice.endpoint);
+                    if (index < 0) {
+                        this.choices.push(choice);
+                    } else {
+                        this.choices.splice(index, 1, choice);
+                    }
+                });
+                if (request !== this.optionsRequest || owner !== this.owner || this.disposed) {
                     return;
                 }
                 if (!result.ok) {
                     throw new Error(result.msg);
                 }
-                this.choices = result.choices;
+                this.choices = result.choices.map(mergeChoice);
             } catch (error) {
-                if (owner === this.owner && !this.disposed) {
+                if (request === this.optionsRequest && owner === this.owner && !this.disposed) {
                     this.optionsError = error.message;
                 }
             }

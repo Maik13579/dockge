@@ -1039,3 +1039,17 @@ test("group endpoints route actions through the owner and logs return to the gro
         serviceName: "app" };
     assert.equal(logs.stackRoute, "/stack-group/Robot/owner%3A5001");
 });
+
+test("stack group sidebar hides agents without matching groups", () => {
+    const { instance: sidebar, template } = component("../frontend/src/components/StackList.vue");
+    sidebar.$root.agentList = { "": {},
+        "empty:5001": {},
+        "robot:5001": {} };
+    sidebar.$root.stackGroupLists = { "": {},
+        "empty:5001": {},
+        "robot:5001": { Robot: [ "Current:core" ] } };
+    assert.deepEqual(Array.from(sidebar.groupAgents, agent => agent.endpoint), [ "robot:5001" ]);
+    assert.equal(template.includes("No stack groups"), false);
+    sidebar.searchText = "missing";
+    assert.equal(sidebar.groupAgents.length, 0);
+});

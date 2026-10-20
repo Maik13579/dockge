@@ -60,7 +60,6 @@
                 </div>
                 <div v-show="!closedAgents.get(agent.endpoint)">
                     <p v-if="$root.stackGroupErrors[agent.endpoint]" class="text-warning small px-2">{{ $root.stackGroupErrors[agent.endpoint] }}</p>
-                    <p v-else-if="agent.groups.length === 0" class="text-secondary small px-2">{{ $t("No stack groups") }}</p>
                     <router-link v-for="group in agent.groups" :key="group.name" class="group-item" :to="group.url">
                         <span class="badge rounded-pill bg-secondary me-2">{{ group.members.length }}</span>
                         <span>{{ group.name }}</span>
@@ -143,7 +142,7 @@ export default {
                     .map(([ name, members ]) => ({ name,
                         members,
                         url: `/stack-group/${encodeURIComponent(name)}${endpoint ? "/" + encodeURIComponent(endpoint) : ""}` })),
-            })).sort((a, b) => !a.endpoint ? -1 : !b.endpoint ? 1 : a.endpoint.localeCompare(b.endpoint));
+            })).filter(agent => agent.groups.length > 0).sort((a, b) => !a.endpoint ? -1 : !b.endpoint ? 1 : a.endpoint.localeCompare(b.endpoint));
         },
         /**
          * Improve the sticky appearance of the list by increasing its
