@@ -3,18 +3,24 @@
         <div class="row service-summary">
             <div class="col-5 service-info">
                 <div class="service-identity">
+                    <div v-if="compactLayout" class="service-status">
+                        <span class="badge me-1" :class="bgStyle">{{ status }}</span>
+                        <span v-if="health" class="badge me-1" :class="health === 'unhealthy' ? 'bg-danger' : 'bg-secondary'">
+                            {{ $t("Health") }}: {{ health }}
+                        </span>
+                    </div>
                     <div class="service-name">
-                        <h4 :title="name">{{ name }}</h4>
                         <button v-if="compact && !isEditMode" type="button" class="btn btn-sm btn-normal details-toggle" :title="$t(expandedCompact ? 'Hide details' : 'Show details')" :aria-label="$t(expandedCompact ? 'Hide details' : 'Show details')" :aria-expanded="expandedCompact" @click="expandedCompact = !expandedCompact">
                             <font-awesome-icon :icon="expandedCompact ? 'chevron-up' : 'chevron-down'" />
                         </button>
+                        <h4 :title="name">{{ name }}</h4>
                     </div>
                     <span v-if="isIncluded && !compactLayout" class="badge bg-secondary mb-2">{{ $t(hasOverrides ? "Overrides" : "Included") }}</span>
                 </div>
                 <div v-show="!compactLayout" class="image mb-2">
                     <span class="me-1">{{ imageName }}:</span><span class="tag">{{ imageTag }}</span>
                 </div>
-                <div v-if="!isEditMode" class="service-status">
+                <div v-if="!isEditMode && !compactLayout" class="service-status">
                     <span class="badge me-1" :class="bgStyle">{{ status }}</span>
                     <span v-if="health" class="badge me-1" :class="health === 'unhealthy' ? 'bg-danger' : 'bg-secondary'">
                         {{ $t("Health") }}: {{ health }}
@@ -594,7 +600,12 @@ export default defineComponent({
         }
 
         .service-identity {
-            flex: 1 1 10rem;
+            flex: 1 1 14rem;
+            flex-wrap: nowrap;
+        }
+
+        .service-status {
+            flex-shrink: 0;
         }
 
         .service-name {
