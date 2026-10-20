@@ -23,6 +23,11 @@
                 </div>
             </div>
 
+            <div class="btn-group w-100 mt-2" role="group" :aria-label="$t('Stack list view')">
+                <button type="button" class="btn btn-sm btn-normal" :class="{ active: $root.stackListMode === 'stacks' }" :aria-pressed="$root.stackListMode === 'stacks'" @click="setListMode('stacks')">{{ $t("Stack") }}</button>
+                <button type="button" class="btn btn-sm btn-normal" :class="{ active: $root.stackListMode === 'groups' }" :aria-pressed="$root.stackListMode === 'groups'" @click="setListMode('groups')">{{ $t("Stack Group") }}</button>
+            </div>
+
             <!-- TODO -->
             <div v-if="false" class="header-filter">
                 <!--<StackListFilter :filterState="filterState" @update-filter="updateFilter" />-->
@@ -46,7 +51,24 @@
                 </span>
             </div>
         </div>
-        <div ref="stackList" class="stack-list" :class="{ scrollbar: scrollbar }" :style="stackListStyle">
+        <div v-if="$root.stackListMode === 'groups'" class="stack-list scrollbar" :style="stackListStyle">
+            <router-link class="btn btn-sm btn-normal w-100 mb-2" to="/stack-group">{{ $t("Add stack group") }}</router-link>
+            <div v-for="agent in groupAgents" :key="agent.endpoint" class="stack-list-inner">
+                <div class="p-2 agent-select" :title="agent.endpoint || $t('currentEndpoint')" @click="closedAgents.set(agent.endpoint, !closedAgents.get(agent.endpoint))">
+                    <font-awesome-icon :icon="closedAgents.get(agent.endpoint) ? 'chevron-circle-right' : 'chevron-circle-down'" class="me-1" />
+                    <span>{{ $root.endpointDisplayFunction(agent.endpoint) }}</span>
+                </div>
+                <div v-show="!closedAgents.get(agent.endpoint)">
+                    <p v-if="$root.stackGroupErrors[agent.endpoint]" class="text-warning small px-2">{{ $root.stackGroupErrors[agent.endpoint] }}</p>
+                    <p v-else-if="agent.groups.length === 0" class="text-secondary small px-2">{{ $t("No stack groups") }}</p>
+                    <router-link v-for="group in agent.groups" :key="group.name" class="group-item" :to="group.url">
+                        <span class="badge rounded-pill bg-secondary me-2">{{ group.members.length }}</span>
+                        <span>{{ group.name }}</span>
+                    </router-link>
+                </div>
+            </div>
+        </div>
+        <div v-else ref="stackList" class="stack-list" :class="{ scrollbar: scrollbar }" :style="stackListStyle">
             <div v-if="$root.info.showOnlyManagedStacks && agentStackList.length === 0" class="text-center mt-3">
                 {{ $t("No matching managed stacks") }}
             </div>
@@ -112,6 +134,17 @@ export default {
         };
     },
     computed: {
+        groupAgents() {
+            return Object.keys(this.$root.agentList).map(endpoint => ({
+                endpoint,
+                groups: Object.entries(this.$root.stackGroupLists[endpoint] || {})
+                    .filter(([ name ]) => name.toLowerCase().includes(this.searchText.toLowerCase()))
+                    .sort(([ left ], [ right ]) => left.localeCompare(right))
+                    .map(([ name, members ]) => ({ name,
+                        members,
+                        url: `/stack-group/${encodeURIComponent(name)}${endpoint ? "/" + encodeURIComponent(endpoint) : ""}` })),
+            })).sort((a, b) => !a.endpoint ? -1 : !b.endpoint ? 1 : a.endpoint.localeCompare(b.endpoint));
+        },
         /**
          * Improve the sticky appearance of the list by increasing its
          * height as user scrolls down.
@@ -238,7 +271,7 @@ export default {
 
         stackListStyle() {
             //let listHeaderHeight = 107;
-            let listHeaderHeight = 60;
+            let listHeaderHeight = 100;
 
             if (this.selectMode) {
                 listHeaderHeight += 42;
@@ -300,6 +333,10 @@ export default {
         window.removeEventListener("scroll", this.onScroll);
     },
     methods: {
+        setListMode(mode) {
+            this.$root.stackListMode = mode;
+            localStorage.stackListMode = mode;
+        },
         /**
          * Handle user scroll
          * @returns {void}
@@ -468,6 +505,18 @@ export default {
 .search-input {
     width: 100%;
     min-width: 0;
+}
+
+.group-item {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    color: inherit;
+    text-decoration: none;
+    border-radius: 8px;
+    overflow-wrap: anywhere;
+
+    &.active { background: rgba(92, 221, 139, 0.15); }
 }
 
 .stack-item {

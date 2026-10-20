@@ -5,6 +5,7 @@ import vm from "node:vm";
 import ts from "typescript";
 import { parse } from "vue/compiler-sfc";
 import { createMemoryHistory, createRouter } from "vue-router";
+import * as stackGroups from "../common/stack-groups";
 import * as util from "../common/util-common";
 import { AgentSocket } from "../common/agent-socket";
 import * as editor from "../frontend/src/compose-editor.js";
@@ -32,7 +33,7 @@ function component(file: string, modules = {}, storage = {}, browser = {}) {
         ResizeObserver: browser.ResizeObserver,
         location: { protocol: "http:",
             host: "localhost" },
-        require: name => modules[name] || (name.endsWith("util-common") ? util
+        require: name => modules[name] || (name.endsWith("stack-groups") ? stackGroups : name.endsWith("util-common") ? util
             : name.endsWith("compose-editor") ? editor
                 : name.endsWith("terminal-search") ? { searchTerminal }
                     : name.endsWith("container-status") ? containerStatus
@@ -983,4 +984,51 @@ test("services sort errors/restarts, running, exited, then inactive with names i
     assert.equal(containerStatus.containerStatusGroup([{ state: "running" }, { state: "exited" }]), 1);
     assert.equal(containerStatus.containerStatusGroup([{ state: "dead" }]), 0);
     assert.equal(containerStatus.containerStatusGroup([{ state: "paused" }]), 1);
+});
+
+test("group container context preserves shared controls and namespaces logs and exec", () => {
+    const { instance: card } = component("../frontend/src/components/Container.vue");
+    const endpoint = stackGroups.stackGroupEndpoint("owner:5001", "Robot", "Jetson:core");
+    card.name = "app";
+    card.context = {
+        endpoint,
+        stack: { name: "core",
+            endpoint: "device:5001",
+            primaryHostname: "device" },
+        serviceConfig: { services: { app: { image: "example/app:latest" } } },
+        displayEnvConfig: { services: { app: { image: "example/app:latest" } } },
+        serviceOperations: {},
+        processing: false,
+        stopping: false,
+        operationRunning: false,
+    };
+    card.serviceStatus = [{ state: "running",
+        name: "app" }];
+    assert.equal(card.stackName, "core");
+    assert.equal(card.endpoint, endpoint);
+    assert.equal(card.processing, false);
+    assert.equal(card.isRunning, true);
+    assert.equal(card.logsRouteLink.params.endpoint, endpoint);
+    assert.equal(card.terminalRouteLink.params.endpoint, endpoint);
+    card.context.stopping = true;
+    assert.equal(card.processing, true);
+});
+
+test("group endpoints route actions through the owner and logs return to the group", () => {
+    const { instance: root } = component("../frontend/src/mixins/socket.ts");
+    const sent = [];
+    root.getSocket = () => ({ emit: (...args) => sent.push(args) });
+    const endpoint = stackGroups.stackGroupEndpoint("owner:5001", "Robot", "Jetson:core");
+    const callback = () => {};
+    root.emitAgent(endpoint, "stopService", "core", "app", callback);
+    assert.deepEqual(sent[0].slice(0, 3), [ "agent", "owner:5001", "stackGroupRequest" ]);
+    assert.equal(sent[0][3].member, "Jetson:core");
+    assert.equal(sent[0][3].event, "stopService");
+    assert.deepEqual(Array.from(sent[0][3].args), [ "core", "app" ]);
+    assert.equal(sent[0][4], callback);
+    const { instance: logs } = component("../frontend/src/pages/ContainerLogs.vue");
+    logs.$route.params = { endpoint,
+        stackName: "core",
+        serviceName: "app" };
+    assert.equal(logs.stackRoute, "/stack-group/Robot/owner%3A5001");
 });

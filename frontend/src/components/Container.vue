@@ -244,6 +244,10 @@ export default defineComponent({
         DockerStat
     },
     props: {
+        context: {
+            type: Object,
+            default: null,
+        },
         compact: {
             type: Boolean,
             default: false,
@@ -294,6 +298,9 @@ export default defineComponent({
         };
     },
     computed: {
+        page() {
+            return this.context || this.$parent.$parent;
+        },
 
         compactLayout() {
             return !!this.compact && !this.isEditMode && !this.expandedCompact;
@@ -357,15 +364,15 @@ export default defineComponent({
         },
 
         endpoint() {
-            return this.$parent.$parent.endpoint;
+            return this.page.endpoint;
         },
 
         stack() {
-            return this.$parent.$parent.stack;
+            return this.page.stack;
         },
 
         stackName() {
-            return this.$parent.$parent.stack.name;
+            return this.page.stack.name;
         },
 
         service() {
@@ -376,7 +383,7 @@ export default defineComponent({
         },
 
         processing() {
-            const page = this.$parent.$parent;
+            const page = this.page;
             return page.stopping || !!page.serviceOperations[this.name]
                 || (page.processing && !page.operationRunning);
         },
@@ -388,11 +395,11 @@ export default defineComponent({
         },
 
         jsonObject() {
-            return this.$parent.$parent.serviceConfig;
+            return this.page.serviceConfig;
         },
 
         envsubstJSONConfig() {
-            return this.$parent.$parent.displayEnvConfig;
+            return this.page.displayEnvConfig;
         },
 
         envsubstService() {

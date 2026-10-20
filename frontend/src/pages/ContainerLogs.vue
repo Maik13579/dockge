@@ -39,6 +39,7 @@
 </template>
 
 <script>
+import { parseStackGroupEndpoint } from "../../../common/stack-groups";
 import Terminal from "../components/Terminal.vue";
 import { getContainerLogsTerminalName } from "../../../common/util-common";
 
@@ -64,6 +65,10 @@ export default {
             return getContainerLogsTerminalName(this.endpoint, this.stackName, this.serviceName);
         },
         stackRoute() {
+            const group = parseStackGroupEndpoint(this.endpoint);
+            if (group) {
+                return `/stack-group/${encodeURIComponent(group.group)}${group.owner ? "/" + encodeURIComponent(group.owner) : ""}`;
+            }
             const path = `/compose/${encodeURIComponent(this.stackName)}`;
             return this.endpoint ? `${path}/${encodeURIComponent(this.endpoint)}` : path;
         },

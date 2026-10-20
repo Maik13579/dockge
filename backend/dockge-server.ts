@@ -41,7 +41,11 @@ import { ImageTransfers } from "./image-transfers";
 import { ImageRouter } from "./routers/image-router";
 import { ImageSocketHandler, ImageAgentSocketHandler } from "./socket-handlers/image-socket-handler";
 
+import { StackGroups } from "./stack-groups";
+import { StackGroupSocketHandler } from "./agent-socket-handlers/stack-group-socket-handler";
+
 export class DockgeServer {
+    stackGroups: StackGroups;
     app : Express;
     httpServer : http.Server;
     packageJSON : PackageJson;
@@ -74,6 +78,7 @@ export class DockgeServer {
      */
     agentSocketHandlerList : AgentSocketHandler[] = [
         new DockerSocketHandler(),
+        new StackGroupSocketHandler(),
         new TerminalSocketHandler(),
         new ImageAgentSocketHandler(),
     ];
@@ -163,6 +168,7 @@ export class DockgeServer {
         this.config.stacksDir = args.stacksDir || process.env.DOCKGE_STACKS_DIR || defaultStacksDir;
         this.config.enableConsole = args.enableConsole || process.env.DOCKGE_ENABLE_CONSOLE === "true" || false;
         this.stacksDir = this.config.stacksDir;
+        this.stackGroups = new StackGroups(this.stacksDir);
 
         log.debug("server", this.config);
 
@@ -609,6 +615,9 @@ export class DockgeServer {
         let socketList = this.io.sockets.sockets.values();
 
         let stackList;
+        const groups = await this.stackGroups.list().then(groups => ({ ok: true,
+            groups }), error => ({ ok: false,
+            msg: error.message }));
 
         for (let socket of socketList) {
             let dockgeSocket = socket as DockgeSocket;
@@ -627,6 +636,7 @@ export class DockgeServer {
                     map.set(stackName, stack.toSimpleJSON(dockgeSocket.endpoint));
                 }
 
+                dockgeSocket.emitAgent("stackGroupList", { ...groups });
                 log.debug("server", "Send stack list to user: " + dockgeSocket.id + " (" + dockgeSocket.endpoint + ")");
                 dockgeSocket.emitAgent("stackList", {
                     ok: true,

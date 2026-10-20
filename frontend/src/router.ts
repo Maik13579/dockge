@@ -9,6 +9,8 @@ import Compose from "./pages/Compose.vue";
 import ContainerTerminal from "./pages/ContainerTerminal.vue";
 import ContainerLogs from "./pages/ContainerLogs.vue";
 
+const StackGroup = () => import("./pages/StackGroup.vue");
+
 const Settings = () => import("./pages/Settings.vue");
 
 // Settings - Sub Pages
@@ -44,6 +46,10 @@ const routes = [
                         path: "/",
                         component: DashboardHome,
                         children: [
+                            { path: "/stack-group",
+                                component: StackGroup },
+                            { path: "/stack-group/:groupName/:endpoint?",
+                                component: StackGroup },
                             {
                                 path: "/compose",
                                 component: Compose,

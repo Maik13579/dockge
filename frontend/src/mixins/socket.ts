@@ -3,6 +3,7 @@ import { Socket } from "socket.io-client";
 import { defineComponent } from "vue";
 import jwtDecode from "jwt-decode";
 import { Terminal } from "@xterm/xterm";
+import { parseStackGroupEndpoint } from "../../../common/stack-groups";
 import { AgentSocket } from "../../../common/agent-socket";
 import { updateImageJob, restoreImageJobs, disconnectImages } from "../images";
 
@@ -35,6 +36,9 @@ export default defineComponent({
             composeTemplate: "",
 
             stackList: {},
+            stackGroupLists: {},
+            stackGroupErrors: {},
+            stackListMode: localStorage.stackListMode === "groups" ? "groups" : "stacks",
 
             // All stack list from all agents
             allAgentStackList: {} as Record<string, object>,
@@ -136,6 +140,10 @@ export default defineComponent({
     methods: {
 
         endpointDisplayFunction(endpoint : string) {
+            const group = parseStackGroupEndpoint(endpoint);
+            if (group) {
+                return group.member.slice(0, group.member.lastIndexOf(":"));
+            }
             const key = endpoint === "current" ? "" : endpoint;
             const name = this.agentList[key]?.name;
             if (this.info.showAgentFriendlyNames !== false && typeof name === "string" && name.trim()) {
@@ -250,6 +258,17 @@ export default defineComponent({
                 terminal.write(data);
             });
 
+            agentSocket.on("stackGroupList", (res) => {
+                const endpoint = res.endpoint || "";
+                this.stackGroupErrors[endpoint] = res.ok ? "" : res.msg;
+                if (res.ok) {
+                    this.stackGroupLists[endpoint] = res.groups;
+                }
+            });
+            agentSocket.on("stackGroupTargetStatus", (res) => {
+                this.agentStatusList[res.target] = res.status;
+            });
+
             agentSocket.on("stackList", (res) => {
                 if (res.ok) {
                     if (!res.endpoint) {
@@ -320,6 +339,18 @@ export default defineComponent({
         },
 
         emitAgent(endpoint : string, eventName : string, ...args : unknown[]) {
+            const group = parseStackGroupEndpoint(endpoint);
+            if (group) {
+                const callback = typeof args[args.length - 1] === "function" ? args.pop() : () => {};
+                this.getSocket().emit("agent", group.owner, "stackGroupRequest", {
+                    action: "proxy",
+                    name: group.group,
+                    member: group.member,
+                    event: eventName,
+                    args,
+                }, callback);
+                return;
+            }
             this.getSocket().emit("agent", endpoint, eventName, ...args);
         },
 
