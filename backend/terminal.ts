@@ -1,5 +1,6 @@
 import { DockgeServer } from "./dockge-server";
 import * as os from "node:os";
+import path from "node:path";
 import * as pty from "@homebridge/node-pty-prebuilt-multiarch";
 import { LimitQueue } from "./utils/limit-queue";
 import { DockgeSocket } from "./util-server";
@@ -10,6 +11,7 @@ import {
 } from "../common/util-common";
 import { sync as commandExistsSync } from "command-exists";
 import { log } from "./log";
+import { assertContainerOperationsAllowed, composeCommand } from "./container-operation-lock";
 
 /**
  * Terminal for running commands, no user interaction
@@ -262,7 +264,18 @@ export class Terminal {
         return terminal;
     }
 
+    static async interruptComposeOperations(server: DockgeServer, directories: Set<string> | null) {
+        await Promise.all([ ...Terminal.terminalMap.values() ].filter(terminal => terminal.server === server
+            && (!directories || directories.has(path.resolve(terminal.cwd))) && terminal.file === "docker" && Array.isArray(terminal.args)
+            && [ "up", "restart", "pull", "build" ].includes(composeCommand(terminal.args) || ""))
+            .map(terminal => terminal.interrupt()));
+    }
+
     public static async exec(server : DockgeServer, socket : DockgeSocket | undefined, terminalName : string, file : string, args : string | string[], cwd : string, interrupt = false, operationName = terminalName) : Promise<number> {
+        if (file === "docker" && [ "up", "restart", "build", "pull", "stop", "kill", "down", "rm" ].includes(composeCommand(args) || "")) {
+            assertContainerOperationsAllowed(server, cwd);
+        }
+
         if (Terminal.shutdowns.has(terminalName)) {
             throw new Error("The stack is stopping, please wait for it to finish.");
         }

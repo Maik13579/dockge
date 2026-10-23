@@ -11,8 +11,8 @@ import { StackGroupTransport } from "../stack-group-transport";
 import { registerGroupTargetHandlers } from "../stack-group-target";
 import { getCombinedTerminalName, getComposeTerminalName, getContainerExecTerminalName, getContainerLogsTerminalName } from "../../common/util-common";
 
-const operations = new Set([ "startStack", "stopStack", "downStack", "restartStack", "pullStack", "killStack" ]);
-const stackEvents = new Set([ ...operations, "startService", "stopService", "restartService", "pullService", "killService", "containerLogs", "leaveContainerLogs", "interactiveTerminal", "leaveCombinedTerminal" ]);
+const operations = new Set([ "startStack", "stopStack", "downStack", "restartStack", "pullStack", "killStack", "buildStack" ]);
+const stackEvents = new Set([ ...operations, "startService", "stopService", "restartService", "pullService", "killService", "buildService", "downService", "rmService", "containerLogs", "leaveContainerLogs", "interactiveTerminal", "leaveCombinedTerminal" ]);
 
 /** Restrict proxy commands to the selected member and its own terminals. */
 export function validateGroupProxy(endpoint: string, member: GroupMember, event: string, args: unknown[]) {
@@ -167,6 +167,7 @@ export class StackGroupSocketHandler extends AgentSocketHandler {
                                     config: result.config || configs.get(key),
                                     configError: result.configError,
                                     serviceStatusList: result.serviceStatusList,
+                                    containerManagement: result.containerManagement === true,
                                     dockerStats: stats.dockerStats };
                             } catch (error) {
                                 snapshot = { ...member,
@@ -196,8 +197,9 @@ export class StackGroupSocketHandler extends AgentSocketHandler {
                                 if (member.error) {
                                     throw new Error(member.error);
                                 }
-                                await transport.call(request.name, member, agents, request.event!, [ member.stackName ], 0);
+                                const result = await transport.call(request.name, member, agents, request.event!, [ member.stackName ], 0);
                                 return { reference: member.reference,
+                                    skipped: result.skipped === true,
                                     ok: true };
                             } catch (error) {
                                 return { reference: member.reference,

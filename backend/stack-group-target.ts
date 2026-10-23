@@ -41,6 +41,7 @@ export function registerGroupTargetHandlers(socket: DockgeSocket, server: Dockge
             callbackResult({ ok: true,
                 stack: await stack.toJSON(typeof targetEndpoint === "string" ? targetEndpoint : ""),
                 serviceStatusList,
+                containerManagement: true,
                 config,
                 configError }, callback);
         } catch (error) {

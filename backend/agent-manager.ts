@@ -206,7 +206,8 @@ export class AgentManager {
             this.imageAgents[endpoint] = { url,
                 supported: res.imageManagement === true };
             this.socket.emit("agentCapabilities", { endpoint,
-                imageManagement: res.imageManagement === true });
+                imageManagement: res.imageManagement === true,
+                containerManagement: res.containerManagement === true });
 
             // Disconnect if the version is lower than 1.4.0
             if (!isDev && semver.satisfies(res.version, "< 1.4.0")) {

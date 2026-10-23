@@ -11,6 +11,7 @@ import { AgentSocket } from "../common/agent-socket";
 import * as editor from "../frontend/src/compose-editor.js";
 import { searchTerminal } from "../frontend/src/terminal-search.js";
 import * as containerStatus from "../frontend/src/container-status.js";
+import * as presentation from "../frontend/src/container-presentation.js";
 import * as runtimeStatus from "../common/container-status";
 
 /** Execute the actual component script with browser/transport dependencies stubbed. */
@@ -37,9 +38,10 @@ function component(file: string, modules = {}, storage = {}, browser = {}) {
         require: name => modules[name] || (name.endsWith("stack-groups") ? stackGroups : name.endsWith("util-common") ? util
             : name.endsWith("compose-editor") ? editor
                 : name.endsWith("terminal-search") ? { searchTerminal }
-                    : name.endsWith("container-status") ? (name.includes("common/") ? runtimeStatus : containerStatus)
-                        : name.endsWith("agent-socket") ? { AgentSocket }
-                            : name === "vue" ? { defineComponent: options => options } : {}),
+                    : name.endsWith("container-presentation") ? presentation
+                        : name.endsWith("container-status") ? (name.includes("common/") ? runtimeStatus : containerStatus)
+                            : name.endsWith("agent-socket") ? { AgentSocket }
+                                : name === "vue" ? { defineComponent: options => options } : {}),
         setTimeout: (fn, delay) => {
             timers.set(++nextTimer, { fn,
                 time: now + delay });
@@ -127,7 +129,7 @@ test("Pull uses its own event and Stop, Down and Kill stay available to interrup
     page.pullStack();
     assert.equal(calls[0][1], "pullStack");
     calls[0].at(-1)({ ok: true });
-    const menu = template.match(/<BDropdown\b[\s\S]*?<\/BDropdown>/)[0];
+    const menu = template.match(/<BDropdown\b[\s\S]*?<\/BDropdown>/g).find(menu => menu.includes("@click=\"stopStack\""));
     for (const action of [ "stopStack", "downStack", "killStack" ]) {
         const item = menu.match(new RegExp(`<BDropdownItem[^>]*@click="${action}"[^>]*>`))[0];
         page.startStack();
@@ -481,7 +483,7 @@ test("terminal output arriving before the join acknowledgement is displayed", ()
     assert.deepEqual(output, [ "Starting\r\n", "", "Started\r\n" ]);
 });
 
-test("container action grids show Stop Kill Restart / Pull Exec Logs or Up Pull Logs", () => {
+test("container action grids show eight running actions and five stopped actions", () => {
     const { instance: card, template } = component("../frontend/src/components/Container.vue");
     const page = { endpoint: "",
         stack: { name: "demo" } };
@@ -498,14 +500,14 @@ test("container action grids show Stop Kill Restart / Pull Exec Logs or Up Pull 
     const tags = actions.match(/<(?:button|router-link)\b(?:[^">]|"[^"]*")*>/g);
     const visible = () => tags.filter(tag => vm.runInNewContext(tag.match(/v-if="([^"]+)"/)[1], card));
     card.serviceStatus = [{ state: "running" }];
-    assert.equal(visible().length, 6);
-    for (const [ index, action ] of [ "stopService", "killService", "restartService", "pullService", "terminalRouteLink", "logsRouteLink" ].entries()) {
+    assert.equal(visible().length, 8);
+    for (const [ index, action ] of [ "stopService", "killService", "restartService", "downService", "pullService", "buildService", "terminalRouteLink", "logsRouteLink" ].entries()) {
         assert.ok(visible()[index].includes(action));
     }
-    assert.match(visible()[4], /\$t\('Exec'\)/);
-    assert.doesNotMatch(visible()[5], /target=/);
+    assert.match(visible()[6], /\$t\('Exec'\)/);
+    assert.doesNotMatch(visible()[7], /target=/);
     card.serviceStatus = [{ state: "exited" }];
-    assert.equal(visible().length, 3);
+    assert.equal(visible().length, 5);
     assert.match(visible()[0], /startService/);
     assert.match(visible()[1], /pullService/);
     assert.match(visible()[2], /logsRouteLink/);
@@ -910,7 +912,7 @@ test("compact view is opt-in and remembers the browser preference across stack p
     next.setContainerView(false);
     assert.equal(storage.containerView, "cards");
     assert.match(template, /:compact="compactView"/);
-    assert.match(template, /v-if="!isEditMode"[^>]*:aria-label="\$t\('Container view'\)"/);
+    assert.match(template, /<ContainerListOptions v-if="!isEditMode"/);
 });
 
 test("compact rows show only Start or Stop, and expansion restores the original controls and metrics", () => {
@@ -931,7 +933,7 @@ test("compact rows show only Start or Stop, and expansion restores the original 
     assert.equal(card.compactStats.MemUsage, "100MiB / 8GiB");
     card.expandedCompact = true;
     assert.equal(card.compactLayout, false);
-    assert.equal(visible().length, 6);
+    assert.equal(visible().length, 8);
     assert.match(visible()[0], /stopService/);
     assert.match(visible()[1], /killService/);
     assert.match(visible()[2], /restartService/);
@@ -941,7 +943,7 @@ test("compact rows show only Start or Stop, and expansion restores the original 
     assert.equal(visible().length, 1);
     assert.match(visible()[0], /startService/);
     card.expandedCompact = true;
-    assert.equal(visible().length, 3);
+    assert.equal(visible().length, 5);
     card.isEditMode = true;
     card.expandedCompact = false;
     assert.equal(card.compactLayout, false, "Editing must always use the original card");
@@ -1183,4 +1185,31 @@ test("ignored exit code settings load, normalize and reject invalid entries befo
     settings.settings.ignoredContainerExitCodes = "";
     assert.equal(settings.validateSettings().success, true);
     assert.deepEqual(Array.from(settings.settings.ignoredContainerExitCodes), []);
+});
+
+test("Build availability uses effective service config and agent capabilities, and new actions target the service", () => {
+    const { instance: card } = component("../frontend/src/components/Container.vue");
+    card.name = "included";
+    card.context = { endpoint: "agent:5001",
+        containerManagement: true,
+        serviceConfig: { services: { included: { build: { context: "/src" } } } } };
+    assert.equal(card.canBuild, true);
+    card.context.serviceConfig.services.included = { image: "app" };
+    assert.equal(card.canBuild, false);
+    assert.equal(card.buildUnavailableReason, "No build configuration");
+    card.context.containerManagement = false;
+    assert.equal(card.supportsManagement, false);
+    assert.equal(card.buildUnavailableReason, "Update agent");
+    const calls = [];
+    card.$emit = (...args) => calls.push(args);
+    card.buildService();
+    card.downService();
+    card.rmService();
+    assert.deepEqual(calls, [[ "build-service", "included" ], [ "down-service", "included" ], [ "rm-service", "included" ]]);
+    const { instance: page } = component("../frontend/src/pages/Compose.vue");
+    page.jsonConfig.services = { included: { build: "." } };
+    page.$root.info = { containerManagement: true };
+    assert.equal(page.canBuildStack, true);
+    page.$root.info.containerManagement = false;
+    assert.equal(page.canBuildStack, false);
 });

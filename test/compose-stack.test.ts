@@ -597,3 +597,28 @@ test("settings RPC validates ignored exit codes before side effects and persists
     assert.equal(reply.ok, false);
     assert.equal(saved.length, 1);
 });
+
+test("bulk shutdown cancels an Update waiting between Pull and Up across endpoint aliases", async t => {
+    const { server } = await fixture(t);
+    const stack = new Stack(server, "test");
+    let release;
+    let began;
+    const waiting = new Promise(resolve => {
+        began = resolve;
+    });
+    const status = new Promise(resolve => {
+        release = resolve;
+    });
+    t.mock.method(stack, "updateStatus", async () => {
+        began();
+        await status;
+        Object.assign(stack, { _status: RUNNING });
+    });
+    const execution = t.mock.method(Terminal, "exec", async () => 0);
+    const pending = stack.update({ endpoint: "nested-owner:5001" } as DockgeSocket);
+    await waiting;
+    Stack.cancelPendingUpdates(server, new Set([ path.resolve(stack.path) ]));
+    release();
+    await assert.rejects(pending, /cancelled/);
+    assert.equal(execution.mock.calls.length, 1, "Cancelled Update must never run its later Up command");
+});

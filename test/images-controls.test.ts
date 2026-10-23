@@ -211,3 +211,41 @@ test("Copy to is hidden without an online agent", () => {
     const template = readFileSync(new URL("../frontend/src/components/Images.vue", import.meta.url), "utf8");
     assert.match(template, /<button v-if="hasOnlineAgent && destinations.length > 0"[^>]*@click="openCopy/);
 });
+
+test("image sorting compares sizes, creation timestamps and usage counts while preserving filters", () => {
+    const { instance, options, storage } = view();
+    instance.images = [
+        { id: "small",
+            tags: [ "a:latest" ],
+            size: 2,
+            created: "2020-01-01",
+            containers: [] },
+        { id: "large",
+            tags: [ "b:latest" ],
+            size: 12,
+            created: "2026-01-01",
+            containers: [{ id: "one" }] },
+        { id: "untagged",
+            tags: [],
+            size: 100,
+            created: "2026-02-01",
+            containers: [] },
+    ];
+    for (const mode of [ "size", "created", "usage" ]) {
+        instance.imageSort = mode;
+        options.watch.imageSort.call(instance, mode);
+        options.watch.imageDirection.call(instance, instance.imageDirection);
+        assert.equal(instance.imageDirection, "desc");
+        assert.equal(instance.filtered[0].id, "large");
+    }
+    instance.hideUntagged = false;
+    instance.imageSort = "size";
+    assert.equal(instance.filtered[0].id, "untagged");
+    instance.imageDirection = "asc";
+    options.watch.imageDirection.call(instance, "asc");
+    assert.equal(instance.filtered[0].id, "small");
+    assert.equal(storage.imageDirection, "asc");
+    instance.search = "b:latest";
+    assert.equal(instance.filtered.length, 1);
+    assert.equal(instance.images[0].id, "small");
+});

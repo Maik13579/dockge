@@ -2,6 +2,8 @@ services:
   dockge:
     image: louislam/dockge:1
     restart: unless-stopped
+    labels:
+      io.dockge.protected: "true"
     ports:
       # Host Port : Container Port
       - 5001:5001

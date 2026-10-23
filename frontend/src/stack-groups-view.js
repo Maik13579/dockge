@@ -1,6 +1,8 @@
 import { stackGroupEndpoint } from "../../common/stack-groups";
-import { containerStatusGroup, countContainerIssues } from "./container-status";
+import { countContainerIssues } from "./container-status";
 import { getCombinedTerminalName, getComposeTerminalName } from "../../common/util-common";
+
+import { containerPreferences, compareContainers } from "./container-presentation";
 
 let nextRequestId = 0;
 
@@ -25,6 +27,7 @@ export default {
             serviceOperations: {},
             serviceOperationRequest: 0,
             results: [],
+            ...containerPreferences(localStorage),
             compactView: localStorage.containerView === "compact",
             terminalMember: "",
             snapshotTimer: null,
@@ -49,8 +52,14 @@ export default {
                 key: JSON.stringify([ member.reference, name ]),
                 name,
                 member,
-            }))).sort((a, b) => containerStatusGroup(a.member.serviceStatusList?.[a.name]) - containerStatusGroup(b.member.serviceStatusList?.[b.name])
-                || a.name.localeCompare(b.name, undefined, { numeric: true }) || a.member.reference.localeCompare(b.member.reference));
+            }))).sort((a, b) => compareContainers({ name: a.name,
+                key: a.key,
+                instances: a.member.serviceStatusList?.[a.name],
+                stats: a.member.dockerStats },
+            { name: b.name,
+                key: b.key,
+                instances: b.member.serviceStatusList?.[b.name],
+                stats: b.member.dockerStats }, this.containerSort, this.containerDirection));
         },
         selectedMember() {
             return this.members.find(member => member.reference === this.terminalMember && member.stack);
@@ -70,6 +79,9 @@ export default {
         },
         containerErrorCount() {
             return this.members.reduce((count, member) => count + countContainerIssues(Object.values(member.serviceStatusList || {}).flat()), 0);
+        },
+        canBuildStack() {
+            return this.members.some(member => !member.error && member.containerManagement && Object.values(member.config?.services || {}).some(service => service.build));
         },
         groupState() {
             if (!this.members.length) {
@@ -176,6 +188,7 @@ export default {
         containerContext(row) {
             return {
                 endpoint: this.memberEndpoint(row.member),
+                containerManagement: row.member.containerManagement === true,
                 stack: row.member.stack,
                 serviceConfig: row.member.config,
                 displayEnvConfig: row.member.config,
@@ -184,6 +197,9 @@ export default {
                 operationRunning: false,
                 serviceOperations: { [row.name]: this.serviceOperations[row.key] },
             };
+        },
+        setContainerOptions(options) {
+            Object.assign(this, options);
         },
         setContainerView(compact) {
             this.compactView = compact;

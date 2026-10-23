@@ -5,6 +5,8 @@
                 {{ $t("home") }}
             </h1>
 
+            <BulkContainers />
+
             <div class="row first-row">
                 <!-- Left -->
                 <div class="col-md-7">
@@ -112,10 +114,12 @@
 
 <script>
 import { statusNameShort } from "../../../common/util-common";
+import BulkContainers from "../components/BulkContainers.vue";
 import Images from "../components/Images.vue";
 
 export default {
     components: {
+        BulkContainers,
         Images,
     },
     props: {

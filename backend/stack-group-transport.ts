@@ -10,6 +10,8 @@ import { DockerSocketHandler } from "./agent-socket-handlers/docker-socket-handl
 import { registerGroupTargetHandlers } from "./stack-group-target";
 import { TerminalSocketHandler } from "./agent-socket-handlers/terminal-socket-handler";
 
+import { ContainerActionsSocketHandler } from "./agent-socket-handlers/container-actions-socket-handler";
+
 interface Peer {
     socket?: Socket;
     local?: AgentSocket;
@@ -17,6 +19,7 @@ interface Peer {
     active: boolean;
     identity: string;
     loggedIn?: boolean;
+    containerManagement?: boolean;
     cancelReady?: () => void;
     virtual?: DockgeSocket;
 }
@@ -66,9 +69,11 @@ export class StackGroupTransport {
             peer.virtual = virtual;
             peer.local = new AgentSocket();
             new DockerSocketHandler().create(virtual, this.server, peer.local);
+            new ContainerActionsSocketHandler().create(virtual, this.server, peer.local);
             new TerminalSocketHandler().create(virtual, this.server, peer.local);
             // Local-only handlers registered by the group socket handler.
             registerGroupTargetHandlers(virtual, this.server, peer.local);
+            peer.containerManagement = true;
             status("online");
         } else {
             if (!agent) {
@@ -77,6 +82,9 @@ export class StackGroupTransport {
             const client = io(agent.url, { extraHeaders: { endpoint },
                 reconnection: true });
             peer.socket = client;
+            client.on("info", info => {
+                peer.containerManagement = info.containerManagement === true;
+            });
             peer.ready = new Promise<void>((resolve, reject) => {
                 const timer = setTimeout(() => reject(new Error(`Agent unavailable: ${member.agentName}`)), 12000);
                 peer.cancelReady = () => {
@@ -130,6 +138,9 @@ export class StackGroupTransport {
         }
         if (!peer.active || (peer.socket && (!peer.socket.connected || !peer.loggedIn))) {
             throw new Error(`Agent unavailable: ${member.agentName}`);
+        }
+        if ([ "buildStack", "buildService", "downService", "rmService" ].includes(event) && !peer.containerManagement) {
+            throw new Error("Update agent");
         }
         return new Promise((resolve, reject) => {
             let settled = false;

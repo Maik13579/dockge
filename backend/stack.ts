@@ -40,6 +40,7 @@ export class Stack {
     protected combinedTerminal? : Terminal;
 
     protected static managedStackList: Map<string, Stack> = new Map();
+    protected static pendingUpdatePaths = new Map<string, { server: DockgeServer; directory: string }>();
     protected static pendingUpdates: Map<string, symbol> = new Map();
 
     constructor(server : DockgeServer, name : string, composeYAML? : string, composeENV? : string, skipFSOperations = false, composeOverrideYAML? : string) {
@@ -475,7 +476,7 @@ export class Stack {
     getComposeOptions(command : string, ...extraOptions : string[]) {
         //--env-file ./../global.env --env-file .env
         let options = [ "compose" ];
-        if ([ "up", "down", "stop", "kill", "restart", "pull" ].includes(command)) {
+        if ([ "up", "down", "stop", "kill", "restart", "pull", "build", "rm" ].includes(command)) {
             // The compact TTY renderer hides containers behind "... N more"
             // in the embedded progress terminal. Keep every progress line.
             options.push("--progress", "plain");
@@ -504,6 +505,7 @@ export class Stack {
     async stop(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
         Stack.pendingUpdates.delete(terminalName);
+        Stack.pendingUpdatePaths.delete(terminalName);
         let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("stop"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to stop, please check the terminal output for more information.");
@@ -523,6 +525,7 @@ export class Stack {
     async down(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
         Stack.pendingUpdates.delete(terminalName);
+        Stack.pendingUpdatePaths.delete(terminalName);
         let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("down"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to down, please check the terminal output for more information.");
@@ -533,6 +536,7 @@ export class Stack {
     async kill(socket: DockgeSocket) : Promise<number> {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
         Stack.pendingUpdates.delete(terminalName);
+        Stack.pendingUpdatePaths.delete(terminalName);
         const exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("kill"), this.path, true);
         if (exitCode !== 0) {
             throw new Error("Failed to kill, please check the terminal output for more information.");
@@ -549,6 +553,15 @@ export class Stack {
         return exitCode;
     }
 
+    static cancelPendingUpdates(server: DockgeServer, directories: Set<string> | null) {
+        for (const [ key, target ] of Stack.pendingUpdatePaths) {
+            if (target.server === server && (!directories || directories.has(path.resolve(target.directory)))) {
+                Stack.pendingUpdates.delete(key);
+                Stack.pendingUpdatePaths.delete(key);
+            }
+        }
+    }
+
     async update(socket: DockgeSocket) {
         const terminalName = getComposeTerminalName(socket.endpoint, this.name);
         if (Stack.pendingUpdates.has(terminalName)) {
@@ -556,6 +569,8 @@ export class Stack {
         }
         const operation = Symbol();
         Stack.pendingUpdates.set(terminalName, operation);
+        Stack.pendingUpdatePaths.set(terminalName, { server: this.server,
+            directory: this.path });
         try {
             let exitCode = await Terminal.exec(this.server, socket, terminalName, "docker", this.getComposeOptions("pull"), this.path);
             if (exitCode !== 0) {
@@ -582,6 +597,7 @@ export class Stack {
         } finally {
             if (Stack.pendingUpdates.get(terminalName) === operation) {
                 Stack.pendingUpdates.delete(terminalName);
+                Stack.pendingUpdatePaths.delete(terminalName);
             }
         }
     }

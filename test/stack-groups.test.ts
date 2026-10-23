@@ -256,6 +256,9 @@ test("nested agent transport uses the owner's credentials and isolates terminal 
     assert.equal(viewer.output.filter(event => event[0] === "terminalWrite").length, 2);
     assert.notEqual(viewer.output.filter(event => event[0] === "terminalWrite")[0][1], viewer.output.filter(event => event[0] === "terminalWrite")[1][1]);
 
+    await assert.rejects(transport.call("Robot", resolveGroupMember("Owner robot:core", Object.values(agents)), agents, "buildStack", [ "core" ]), /Update agent/);
+    assert.equal(received.length, 2, "Older agents must not receive unsupported commands");
+
     // Rebinding the same friendly name must discard its old connection.
     const replacementHTTP = http.createServer();
     const replacementIO = new Server(replacementHTTP);
@@ -559,4 +562,32 @@ test("group failures are counted across agents and failed replicas sort above he
     assert.equal(groupView.computed.rows.call(view)[0].member.reference, failed.reference);
     assert.equal(groupView.computed.groupState.call({ ...view,
         containerErrorCount: count }), "Containers need attention");
+});
+
+test("group Build skips image-only members and preserves member-local service action targets", async t => {
+    const { groups, request } = await controller(t);
+    await groups.save("Robot", [ "Current:core", "Owner robot:core" ]);
+    const calls = [];
+    t.mock.method(StackGroupTransport.prototype, "call", async (_name, member, _agents, event, args) => {
+        calls.push({ reference: member.reference,
+            event,
+            args });
+        return { ok: true,
+            skipped: !member.endpoint };
+    });
+    const result = await request({ action: "operate",
+        name: "Robot",
+        event: "buildStack" });
+    assert.equal(result.ok, true);
+    assert.equal(result.results[0].skipped, true);
+    for (const event of [ "buildService", "downService", "rmService" ]) {
+        const reply = await request({ action: "proxy",
+            name: "Robot",
+            member: "Owner robot:core",
+            event,
+            args: [ "core", "app" ] });
+        assert.equal(reply.ok, true);
+        assert.equal(calls.at(-1).reference, "Owner robot:core");
+        assert.equal(calls.at(-1).event, event);
+    }
 });

@@ -42,7 +42,7 @@
             </div>
             <div class="col-7 service-controls">
                 <div class="function">
-                    <div class="service-actions" role="group">
+                    <div class="service-actions" :class="{ 'running-actions': isRunning }" role="group">
                         <button
                             v-if="!isEditMode && !isRunning"
                             class="btn btn-primary"
@@ -80,10 +80,12 @@
                             <font-awesome-icon icon="rotate" :class="{ 'me-1': !compactLayout }" />
                             <span :class="{ 'visually-hidden': compactLayout }">{{ $t("restartStack") }}</span>
                         </button>
+                        <button v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :disabled="processing || !supportsManagement" :title="$t(supportsManagement ? 'Down' : 'Update agent')" @click="downService">{{ $t("Down") }}</button>
                         <button v-if="!isEditMode && !compactLayout" class="btn btn-normal" :title="$t('Pull')" :aria-label="$t('Pull')" :disabled="processing" @click="pullService">
                             <font-awesome-icon icon="cloud-arrow-down" class="me-1" />
                             {{ $t("Pull") }}
                         </button>
+                        <button v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :disabled="processing || !canBuild" :title="$t(buildUnavailableReason)" @click="buildService">{{ $t("Build") }}</button>
                         <router-link v-if="!isEditMode && isRunning && !compactLayout" class="btn btn-normal" :to="terminalRouteLink" :title="$t('Exec')" :aria-label="$t('Exec')">
                             <font-awesome-icon icon="terminal" class="me-1" />
                             {{ $t("Exec") }}
@@ -92,6 +94,8 @@
                             <font-awesome-icon icon="stream" class="me-1" />
                             {{ $t("Logs") }}
                         </router-link>
+                        <button v-if="!isEditMode && !isRunning && !compactLayout" class="btn btn-normal" :disabled="processing || !supportsManagement || !serviceStatus?.length" :title="$t(supportsManagement ? 'Rm' : 'Update agent')" @click="rmService">{{ $t("Rm") }}</button>
+                        <button v-if="!isEditMode && !isRunning && !compactLayout" class="btn btn-normal" :disabled="processing || !canBuild" :title="$t(buildUnavailableReason)" @click="buildService">{{ $t("Build") }}</button>
                     </div>
                 </div>
             </div>
@@ -291,6 +295,9 @@ export default defineComponent({
     },
     emits: [
         "start-service",
+        "build-service",
+        "down-service",
+        "rm-service",
         "stop-service",
         "kill-service",
         "pull-service",
@@ -310,6 +317,18 @@ export default defineComponent({
             return this.context || this.$parent.$parent;
         },
 
+        supportsManagement() {
+            if (this.page.containerManagement !== undefined) {
+                return this.page.containerManagement;
+            }
+            return this.page.endpoint ? this.$root.containerCapabilities?.[this.page.endpoint] === true : this.$root.info?.containerManagement === true;
+        },
+        canBuild() {
+            return this.supportsManagement && !!this.service.build;
+        },
+        buildUnavailableReason() {
+            return !this.supportsManagement ? "Update agent" : this.service.build ? "Build" : "No build configuration";
+        },
         compactLayout() {
             return !!this.compact && !this.isEditMode && !this.expandedCompact;
         },
@@ -529,6 +548,15 @@ export default defineComponent({
                 value: this.service[field],
             });
         },
+        buildService() {
+            this.$emit("build-service", this.name);
+        },
+        downService() {
+            this.$emit("down-service", this.name);
+        },
+        rmService() {
+            this.$emit("rm-service", this.name);
+        },
         startService() {
             this.$emit("start-service", this.name);
         },
@@ -623,6 +651,10 @@ export default defineComponent({
         display: grid;
         grid-template-columns: repeat(3, minmax(0, 1fr));
         gap: 0.5rem;
+        &.running-actions {
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            .btn { font-size: 0.8rem; padding-left: 0.25rem; padding-right: 0.25rem; }
+        }
 
         .btn {
             padding-left: 0.5rem;
@@ -690,7 +722,8 @@ export default defineComponent({
             white-space: nowrap;
         }
 
-        .service-actions {
+        .service-actions,
+        .service-actions.running-actions {
             grid-template-columns: none;
             grid-auto-flow: column;
             grid-auto-columns: 2rem;

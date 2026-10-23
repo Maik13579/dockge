@@ -44,8 +44,14 @@ import { ImageSocketHandler, ImageAgentSocketHandler } from "./socket-handlers/i
 import { StackGroups } from "./stack-groups";
 import { StackGroupSocketHandler } from "./agent-socket-handlers/stack-group-socket-handler";
 
+import { ContainerActionsSocketHandler } from "./agent-socket-handlers/container-actions-socket-handler";
+
+import { BulkContainers } from "./bulk-containers";
+import { BulkContainerSocketHandler } from "./agent-socket-handlers/bulk-container-socket-handler";
+
 export class DockgeServer {
     stackGroups: StackGroups;
+    bulkContainers = new BulkContainers(this);
     app : Express;
     httpServer : http.Server;
     packageJSON : PackageJson;
@@ -78,6 +84,8 @@ export class DockgeServer {
      */
     agentSocketHandlerList : AgentSocketHandler[] = [
         new DockerSocketHandler(),
+        new ContainerActionsSocketHandler(),
+        new BulkContainerSocketHandler(),
         new StackGroupSocketHandler(),
         new TerminalSocketHandler(),
         new ImageAgentSocketHandler(),
@@ -461,6 +469,7 @@ export class DockgeServer {
             latestVersion: latestVersionProperty,
             isContainer,
             imageManagement: true,
+            containerManagement: true,
             primaryHostname: await Settings.get("primaryHostname"),
             showOnlyManagedStacks: (await Settings.get("showOnlyManagedStacks")) === true,
             showComposeOnlyInEditMode: (await Settings.get("showComposeOnlyInEditMode")) === true,

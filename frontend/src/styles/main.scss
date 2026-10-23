@@ -695,3 +695,26 @@ code {
 
 // Localization
 @import "localization.scss";
+
+.container-grid-scope {
+    container-type: inline-size;
+    margin-bottom: 1rem;
+}
+.container-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 1rem;
+    align-items: start;
+    > .service-card { margin-bottom: 0 !important; }
+}
+@container (min-width: 720px) {
+    .container-grid[data-columns="2"], .container-grid[data-columns="3"], .container-grid[data-columns="4"] {
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+}
+@container (min-width: 1080px) {
+    .container-grid[data-columns="3"], .container-grid[data-columns="4"] { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@container (min-width: 1440px) {
+    .container-grid[data-columns="4"] { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}

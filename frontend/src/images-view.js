@@ -9,6 +9,8 @@ export default {
             details: {},
             busy: {},
             search: "",
+            imageSort: [ "name", "size", "created", "usage" ].includes(localStorage.imageSort) ? localStorage.imageSort : "name",
+            imageDirection: localStorage.imageDirection === "desc" ? "desc" : "asc",
             hideUntagged: localStorage.hideUntaggedImages !== "false",
             loading: false,
             error: "",
@@ -47,7 +49,13 @@ export default {
             const search = this.search.toLowerCase();
             return this.images.filter(image => (!this.hideUntagged || image.tags.length > 0)
                 && [ image.id, ...image.tags ].some(text => text.toLowerCase().includes(search)))
-                .sort((a, b) => (a.tags[0] || a.id).localeCompare(b.tags[0] || b.id, undefined, { numeric: true }));
+                .sort((a, b) => {
+                    const direction = this.imageDirection === "desc" ? -1 : 1;
+                    const name = (a.tags[0] || a.id).localeCompare(b.tags[0] || b.id, undefined, { numeric: true });
+                    const value = this.imageSort === "size" ? a.size - b.size : this.imageSort === "created" ? new Date(a.created) - new Date(b.created)
+                        : this.imageSort === "usage" ? a.containers.length - b.containers.length : name;
+                    return (Number.isFinite(value) ? value : 0) * direction || name || a.id.localeCompare(b.id);
+                });
         },
         jobs() {
             return Object.values(this.$root.imageJobs).slice().reverse();
@@ -57,6 +65,13 @@ export default {
         },
     },
     watch: {
+        imageSort(value) {
+            localStorage.imageSort = value;
+            this.imageDirection = value === "name" ? "asc" : "desc";
+        },
+        imageDirection(value) {
+            localStorage.imageDirection = value;
+        },
         endpoint() {
             this.images = [];
             this.details = {};

@@ -7,6 +7,11 @@
                     {{ device.name }}{{ online(device.endpoint) ? '' : ' (' + $t('Offline') + ')' }}
                 </option>
             </select>
+            <select v-model="imageSort" class="form-select device-select" :aria-label="$t('Sort images')">
+                <option value="name">{{ $t("Name") }}</option><option value="size">{{ $t("Size") }}</option>
+                <option value="created">{{ $t("Created") }}</option><option value="usage">{{ $t("Container usage") }}</option>
+            </select>
+            <button class="btn btn-normal" :aria-label="$t('Sort direction')" @click="imageDirection = imageDirection === 'asc' ? 'desc' : 'asc'">{{ imageDirection === 'asc' ? '↑' : '↓' }}</button>
             <button class="btn btn-normal" :disabled="!available || loading" @click="load">{{ $t("Refresh") }}</button>
             <button class="btn btn-normal" :disabled="!available" @click="pullDialog = true">{{ $t("Pull") }}</button>
             <button class="btn btn-primary" :disabled="!available" @click="$refs.upload.click()">{{ $t("Upload") }}</button>

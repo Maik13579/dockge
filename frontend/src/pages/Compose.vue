@@ -41,6 +41,10 @@
                         {{ $t("Pull") }}
                     </button>
 
+                    <BDropdown v-if="!isEditMode" right text="" variant="normal">
+                        <BDropdownItem :disabled="stackBusy || !canBuildStack" :title="$t(containerManagement ? (canBuildStack ? 'Build' : 'No build configuration') : 'Update agent')" @click="runStackOperation('buildStack')">{{ $t("Build") }}</BDropdownItem>
+                    </BDropdown>
+
                     <button v-if="!isEditMode || operationRunning" class="btn btn-normal" :disabled="stopping" @click="stopStack">
                         <font-awesome-icon icon="stop" class="me-1" />
                         {{ $t("stopStack") }}
@@ -115,12 +119,14 @@
                     </div>
 
                     <!-- Containers -->
-                    <div class="d-flex align-items-center justify-content-between gap-2 mb-3">
+                    <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-3">
                         <h4 class="mb-0">{{ $tc("container", 2) }}</h4>
-                        <div v-if="!isEditMode" class="btn-group" role="group" :aria-label="$t('Container view')">
-                            <button type="button" class="btn btn-sm btn-normal" :class="{ active: !compactView }" :aria-pressed="!compactView" @click="setContainerView(false)">{{ $t("Cards") }}</button>
-                            <button type="button" class="btn btn-sm btn-normal" :class="{ active: compactView }" :aria-pressed="compactView" @click="setContainerView(true)">{{ $t("Compact") }}</button>
-                        </div>
+                        <ContainerListOptions v-if="!isEditMode" :columns="containerColumns" :sort="containerSort" :direction="containerDirection" @change="setContainerOptions">
+                            <div class="btn-group" role="group" :aria-label="$t('Container view')">
+                                <button type="button" class="btn btn-sm btn-normal" :class="{ active: !compactView }" :aria-pressed="!compactView" @click="setContainerView(false)">{{ $t("Cards") }}</button>
+                                <button type="button" class="btn btn-sm btn-normal" :class="{ active: compactView }" :aria-pressed="compactView" @click="setContainerView(true)">{{ $t("Compact") }}</button>
+                            </div>
+                        </ContainerListOptions>
                     </div>
                     <div v-if="!showComposeFiles && resolvingConfig" class="mb-3 text-secondary" role="status">{{ $t("Resolving Compose configuration...") }}</div>
                     <div v-if="!showComposeFiles && configError" class="mb-3 text-warning" role="alert">{{ $t("Compose configuration could not be resolved") }}: {{ configError }}</div>
@@ -143,26 +149,31 @@
                         </button>
                     </div>
 
-                    <div ref="containerList">
-                        <Container
-                            v-for="(name, index) in sortedServiceNames"
-                            :key="name"
-                            :name="name"
-                            :compact="compactView"
-                            :is-edit-mode="isEditMode"
-                            :first="index === 0"
-                            :is-included="!jsonConfig.services[name]"
-                            :has-overrides="!!overrideConfig.services[name]"
-                            :serviceStatus="serviceStatusList[name]"
-                            :dockerStats="dockerStats"
-                            @start-service="startService"
-                            @stop-service="stopService"
-                            @kill-service="killService"
-                            @pull-service="pullService"
-                            @restart-service="restartService"
-                            @update-service="updateService"
-                            @remove-service="removeService"
-                        />
+                    <div ref="containerList" class="container-grid-scope">
+                        <div class="container-grid" :data-columns="isEditMode ? 1 : containerColumns">
+                            <Container
+                                v-for="(name, index) in sortedServiceNames"
+                                :key="name"
+                                :name="name"
+                                :compact="compactView"
+                                :is-edit-mode="isEditMode"
+                                :first="index === 0"
+                                :is-included="!jsonConfig.services[name]"
+                                :has-overrides="!!overrideConfig.services[name]"
+                                :serviceStatus="serviceStatusList[name]"
+                                :dockerStats="dockerStats"
+                                @start-service="startService"
+                                @stop-service="stopService"
+                                @kill-service="killService"
+                                @pull-service="pullService"
+                                @build-service="buildService"
+                                @down-service="downService"
+                                @rm-service="rmService"
+                                @restart-service="restartService"
+                                @update-service="updateService"
+                                @remove-service="removeService"
+                            />
+                        </div>
                     </div>
 
                     <button v-if="false && isEditMode && jsonConfig.services && Object.keys(jsonConfig.services).length > 0" class="btn btn-normal mb-3" @click="addContainer">{{ $t("addContainer") }}</button>
@@ -282,7 +293,9 @@
 
 <script>
 import CodeMirror from "vue-codemirror6";
-import { containerStatusGroup, countContainerIssues } from "../container-status";
+import ContainerListOptions from "../components/ContainerListOptions.vue";
+import { containerPreferences, compareContainers } from "../container-presentation";
+import { countContainerIssues } from "../container-status";
 import { yaml } from "@codemirror/lang-yaml";
 import { python } from "@codemirror/lang-python";
 import { dracula as editorTheme } from "thememirror";
@@ -315,8 +328,6 @@ services:
 `;
 const envDefault = "# VARIABLE=value #comment";
 const validationDelay = 3000;
-const serviceNameCollator = new Intl.Collator(undefined, { numeric: true,
-    sensitivity: "base" });
 
 let yamlErrorTimeout = null;
 
@@ -324,6 +335,7 @@ let dockerStatsTimeout = null;
 
 export default {
     components: {
+        ContainerListOptions,
         NetworkInput,
         FontAwesomeIcon,
         CodeMirror,
@@ -395,6 +407,7 @@ export default {
             serviceStatusRequest: 0,
             serviceStatusError: "",
             dockerStats: {},
+            ...containerPreferences(localStorage),
             compactView: localStorage.containerView === "compact",
             isEditMode: false,
             submitted: false,
@@ -405,6 +418,12 @@ export default {
         };
     },
     computed: {
+        containerManagement() {
+            return this.endpoint ? this.$root.containerCapabilities?.[this.endpoint] === true : this.$root.info?.containerManagement === true;
+        },
+        canBuildStack() {
+            return this.containerManagement && Object.values(this.serviceConfig.services || {}).some(service => service.build);
+        },
         stackBusy() {
             return this.processing || Object.keys(this.serviceOperations).length > 0;
         },
@@ -419,8 +438,12 @@ export default {
             if (this.isEditMode) {
                 return names;
             }
-            return names.sort((left, right) => containerStatusGroup(this.serviceStatusList[left]) - containerStatusGroup(this.serviceStatusList[right])
-                || serviceNameCollator.compare(left, right));
+            return names.sort((left, right) => compareContainers({ name: left,
+                instances: this.serviceStatusList[left],
+                stats: this.dockerStats },
+            { name: right,
+                instances: this.serviceStatusList[right],
+                stats: this.dockerStats }, this.containerSort, this.containerDirection));
         },
 
         activeYAML: {
@@ -661,6 +684,9 @@ export default {
         this.configRequest++;
     },
     methods: {
+        setContainerOptions(options) {
+            Object.assign(this, options);
+        },
         setContainerView(compact) {
             this.compactView = compact;
             localStorage.containerView = compact ? "compact" : "cards";
@@ -1076,6 +1102,15 @@ export default {
             this.stack.name = this.stack?.name?.toLowerCase();
         },
 
+        buildService(name) {
+            this.runServiceOperation("buildService", name);
+        },
+        downService(name) {
+            this.runServiceOperation("downService", name);
+        },
+        rmService(name) {
+            this.runServiceOperation("rmService", name);
+        },
         startService(serviceName) {
             this.runServiceOperation("startService", serviceName);
         },

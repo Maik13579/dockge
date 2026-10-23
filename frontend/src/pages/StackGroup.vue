@@ -25,6 +25,9 @@
                         <font-awesome-icon icon="cloud-arrow-down" class="me-1" />
                         {{ $t("Pull") }}
                     </button>
+                    <BDropdown right text="" variant="normal">
+                        <BDropdownItem :disabled="processing || !canBuildStack" @click="runGroupOperation('buildStack')">{{ $t("Build") }}</BDropdownItem>
+                    </BDropdown>
                     <button class="btn btn-normal" :disabled="stopping || !members.length" @click="runGroupOperation('stopStack')">
                         <font-awesome-icon icon="stop" class="me-1" />
                         {{ $t("stopStack") }}
@@ -91,21 +94,28 @@
             <div v-if="loading" role="status">{{ $t("Loading…") }}</div>
             <div v-for="member in members.filter(member => member.error || member.configError)" :key="member.reference" class="text-warning mb-2">{{ member.agentName }} / {{ member.stackName }}: {{ member.error || member.configError }}</div>
             <div v-if="results.length" class="shadow-box mb-3">
-                <div v-for="result in results" :key="result.reference" :class="result.ok ? 'text-success' : 'text-danger'">{{ result.reference }}: {{ result.ok ? $t("Completed") : result.msg }}</div>
+                <div v-for="result in results" :key="result.reference" :class="result.ok ? 'text-success' : 'text-danger'">{{ result.reference }}: {{ result.skipped ? $t('No build configuration') : result.ok ? $t('Completed') : result.msg }}</div>
             </div>
             <div class="d-flex justify-content-between align-items-center mb-3">
                 <h4 class="mb-0">{{ $t("Containers") }}</h4>
-                <div class="btn-group" role="group" :aria-label="$t('Container view')">
-                    <button class="btn btn-sm btn-normal" :class="{ active: !compactView }" :aria-pressed="!compactView" @click="setContainerView(false)">{{ $t("Cards") }}</button>
-                    <button class="btn btn-sm btn-normal" :class="{ active: compactView }" :aria-pressed="compactView" @click="setContainerView(true)">{{ $t("Compact") }}</button>
+                <ContainerListOptions :columns="containerColumns" :sort="containerSort" :direction="containerDirection" @change="setContainerOptions">
+                    <div class="btn-group" role="group" :aria-label="$t('Container view')">
+                        <button class="btn btn-sm btn-normal" :class="{ active: !compactView }" :aria-pressed="!compactView" @click="setContainerView(false)">{{ $t("Cards") }}</button>
+                        <button class="btn btn-sm btn-normal" :class="{ active: compactView }" :aria-pressed="compactView" @click="setContainerView(true)">{{ $t("Compact") }}</button>
+                    </div>
+                </ContainerListOptions>
+            </div>
+            <div class="container-grid-scope">
+                <div class="container-grid" :data-columns="containerColumns">
+                    <Container
+                        v-for="row in rows" :key="row.key"
+                        :name="row.name" :group-label="`${row.member.agentName} / ${row.member.stackName}`" :context="containerContext(row)" :compact="compactView" :service-status="row.member.serviceStatusList?.[row.name]" :docker-stats="row.member.dockerStats || {}"
+                        @start-service="runServiceOperation('startService', row)" @stop-service="runServiceOperation('stopService', row)"
+                        @build-service="runServiceOperation('buildService', row)" @down-service="runServiceOperation('downService', row)" @rm-service="runServiceOperation('rmService', row)"
+                        @kill-service="runServiceOperation('killService', row)" @restart-service="runServiceOperation('restartService', row)" @pull-service="runServiceOperation('pullService', row)"
+                    />
                 </div>
             </div>
-            <Container
-                v-for="row in rows" :key="row.key"
-                :name="row.name" :group-label="`${row.member.agentName} / ${row.member.stackName}`" :context="containerContext(row)" :compact="compactView" :service-status="row.member.serviceStatusList?.[row.name]" :docker-stats="row.member.dockerStats || {}"
-                @start-service="runServiceOperation('startService', row)" @stop-service="runServiceOperation('stopService', row)"
-                @kill-service="runServiceOperation('killService', row)" @restart-service="runServiceOperation('restartService', row)" @pull-service="runServiceOperation('pullService', row)"
-            />
             <template v-if="selectedMember">
                 <div class="d-flex align-items-center gap-2 mb-3">
                     <h4 class="mb-0">{{ $t("terminal") }}</h4>
@@ -121,11 +131,13 @@
 </template>
 
 <script>
+import ContainerListOptions from "../components/ContainerListOptions.vue";
 import Container from "../components/Container.vue";
 import Terminal from "../components/Terminal.vue";
 import view from "../stack-groups-view";
 export default { ...view,
-    components: { Container,
+    components: { ContainerListOptions,
+        Container,
         Terminal } };
 </script>
 

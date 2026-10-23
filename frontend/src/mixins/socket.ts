@@ -53,6 +53,7 @@ export default defineComponent({
 
             },
             agentCapabilities: {},
+            containerCapabilities: {},
             imageJobs: {},
         };
     },
@@ -305,6 +306,7 @@ export default defineComponent({
 
             socket.on("agentCapabilities", (res) => {
                 this.agentCapabilities[res.endpoint] = res.imageManagement === true;
+                this.containerCapabilities[res.endpoint] = res.containerManagement === true;
             });
             socket.on("imageJob", job => updateImageJob(this, job));
             socket.on("imageJobs", jobs => restoreImageJobs(this, jobs));
